@@ -2,8 +2,8 @@ import sys
 
 from PyQt6.QtWidgets import QApplication
 
-from ingestion.networking import RSSIWorker
-from presentation.gui import MainWindow
+from wifi.networking import RSSIWorker
+from ui.main_window import MainWindow
 
 
 def main():

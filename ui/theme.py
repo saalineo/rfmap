@@ -96,4 +96,49 @@ QStatusBar {{
 QStatusBar::item {{
     border: none;
 }}
+QTableWidget {{
+    background-color: {BG_SURFACE};
+    color: {FG};
+    border: 1px solid {BG_BORDER};
+    border-radius: 4px;
+    gridline-color: {BG_BORDER};
+    selection-background-color: {BLUE};
+    selection-color: {BG_DARK};
+}}
+QTableWidget::item {{
+    padding: 2px 6px;
+}}
+QTableWidget::item:selected {{
+    background-color: {BLUE};
+    color: {BG_DARK};
+}}
+QHeaderView::section {{
+    background-color: {BG_DARK};
+    color: {FG};
+    padding: 4px 8px;
+    border: 1px solid {BG_BORDER};
+    font-weight: bold;
+}}
+QSpinBox {{
+    background-color: {BG_SURFACE};
+    color: {FG};
+    border: 1px solid {BG_BORDER};
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+}}
+QListWidget {{
+    background-color: {BG_SURFACE};
+    color: {FG};
+    border: 1px solid {BG_BORDER};
+    border-radius: 4px;
+    padding: 2px;
+}}
+QListWidget::item {{
+    padding: 2px 6px;
+}}
+QListWidget::item:selected {{
+    background-color: {BLUE};
+    color: {BG_DARK};
+}}
 """

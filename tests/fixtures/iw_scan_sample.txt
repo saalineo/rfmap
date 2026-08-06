@@ -1,0 +1,39 @@
+BSS 00:11:22:33:44:55(on wlan0)
+    SSID: MyCorp-WPA
+    freq: 5180
+    signal: -45.00 dBm
+    RSN:     * WPA2 version 1
+    WPA:     * WPA2 version 1
+    WME:
+    ERP:     <HT>
+BSS aa:bb:cc:dd:ee:01(on wlan0)
+    SSID: MyCorp
+    freq: 2437
+    signal: -52.00 dBm
+    WPA:     * WPA2 version 1
+    WME:
+    ERP:     <HT>
+BSS aa:bb:cc:dd:ee:02(on wlan0)
+    freq: 2462
+    signal: -78.00 dBm
+    WME:
+    ERP:     <HT>
+BSS aa:bb:cc:dd:ee:03(on wlan0)
+    SSID: GuestNet
+    freq: 2412
+    signal: -65.00 dBm
+    RSN:     * WPA2 version 1
+    WME:
+    ERP:     <HT>
+BSS aa:bb:cc:dd:ee:04(on wlan0)
+    SSID: Free_Admin
+    freq: 2437
+    signal: -60.00 dBm
+    WME:
+    ERP:     <HT>
+BSS aa:bb:cc:dd:ee:05(on wlan0)
+    SSID: 
+    freq: 5180
+    signal: -82.00 dBm
+    WME:
+    ERP:     <HT>

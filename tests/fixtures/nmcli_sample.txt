@@ -1,0 +1,4 @@
+SSID              BSSID              CHAN  SECURITY  SIGNAL
+MyCorp            aa:bb:cc:dd:ee:01    6  WPA2      82
+GuestNet          bb:cc:dd:ee:ff:01   11  --        45
+OpenNet           cc:dd:ee:ff:aa:01    1  --        30

@@ -1,7 +1,10 @@
 from dataclasses import dataclass
+import logging
 
 import numpy as np
 from scipy.interpolate import RBFInterpolator
+
+logger = logging.getLogger(__name__)
 
 GRID_SIZE = 100
 CELL_METERS = 0.3
@@ -167,7 +170,8 @@ def compute_heatmap(
             rbf = RBFInterpolator(pts, residuals, kernel="multiquadric")
             residual_flat = rbf(grid_points)
             residual_grid = residual_flat.reshape(GRID_SIZE, GRID_SIZE)
-        except Exception:
+        except Exception as exc:
+            logger.debug("RBF interpolation failed: %s", exc)
             residual_grid = np.zeros_like(baseline)
 
     heatmap = baseline + residual_grid

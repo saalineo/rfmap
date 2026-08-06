@@ -1,6 +1,8 @@
 # Wavey
 
-![Logo](assets/logo.jpeg)
+![Wavey](assets/wavey.png)
+
+Real-time 3D Wi-Fi signal heatmapper with rogue AP detection and physical localization. Walk around, click your position, and watch the heatmap build like a live thermal camera.
 
 [![Python](https://img.shields.io/badge/python-3.13+-blue?logo=python&logoColor=white)]()
 [![PyQt6](https://img.shields.io/badge/PyQt6-6.x-green?logo=qt&logoColor=white)]()
@@ -12,23 +14,9 @@
 [![OpenGL](https://img.shields.io/badge/GPU-OpenGL-red?logo=opengl&logoColor=white)]()
 [![Status](https://img.shields.io/badge/status-active-success)]()
 
-Real-time 3D Wi-Fi signal heatmapper. Walk around, click your position, and watch the heatmap build like a live thermal camera.
-
-![Interface](assets/interface.png)
-
-## Quick Start
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
-
-Click **Demo Data (20 pts)** to see the full scene immediately, or check **Auto-sample** to auto-record points.
-
 ## Features
 
+### 3D Heatmapper
 - **3D OpenGL heatmap** — GPU-accelerated Phong-shaded surface via VisPy
 - **Auto router detection** — signal-weighted centroid from your clicks
 - **Connected device mapping** — live device names + positions around the router
@@ -37,6 +25,21 @@ Click **Demo Data (20 pts)** to see the full scene immediately, or check **Auto-
 - **Scrolling waterfall** — live RSSI history overlay
 - **Turntable camera** — arrow keys rotate the 3D view
 - **Tokyo Night theme** — dark UI throughout
+
+### Threat Scanner
+Toggle the **Threat Scanner** panel to access the AP scanner and rogue AP localization tool:
+- **AP Scanner** — enumerate all nearby networks (SSID, BSSID, channel, security, RSSI)
+- **Rogue Detector** — whitelist-based heuristics flag evil twins, open corporate SSIDs, hidden APs
+- **Survey Mode** — click floor points around a target AP to collect RSSI samples
+- **Localization Engine** — nonlinear least-squares fit with error ellipse and GDOP
+- **3D Threat Overlay** — red ceiling marker, confidence ellipse, drop line on the 3D canvas
+- **Reporting** — export survey sessions as JSON/CSV/HTML reports
+
+## Quick Start
+
+```bash
+python main.py
+```
 
 ## Usage
 
@@ -47,14 +50,15 @@ Click **Demo Data (20 pts)** to see the full scene immediately, or check **Auto-
 | Arrow keys | Rotate camera |
 | Auto-sample checkbox | Auto-record every 1s |
 | Demo Data button | 20 synthetic points instantly |
+| ⚡ Threat Scanner | Open AP scanner + rogue AP survey |
 
 ## Architecture
 
 Three decoupled pipelines on separate threads:
 
-1. **Ingestion** (`ingestion/networking.py`) — OS-level RSSI polling with automatic simulated fallback
-2. **Processing** (`processing/`) — Gaussian blob kernel regression, physics path-loss model, router estimation
-3. **Presentation** (`presentation/`) — PyQt6 window with VisPy OpenGL 3D canvas
+1. **Wi-Fi** (`wifi/networking.py`) — OS-level RSSI polling with automatic simulated fallback
+2. **Heatmap** (`heatmap/`) — Gaussian blob kernel regression, physics path-loss model, router estimation
+3. **UI** (`ui/`) — PyQt6 window with VisPy OpenGL 3D canvas
 
 ## Platform Support
 
@@ -66,7 +70,8 @@ Three decoupled pipelines on separate threads:
 
 ## Calibration
 
-Edit `processing/matrix_math.py`:
+Edit `heatmap/math.py`:
 
 - **CELL_METERS** (default 0.3): real-world meters per grid cell
 - **TX_POWER_DBM** (default -30.0): RSSI at 1 cell from router
+

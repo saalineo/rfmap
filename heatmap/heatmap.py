@@ -1,6 +1,6 @@
 import numpy as np
 
-from processing.matrix_math import GRID_SIZE, compute_physics_baseline, Obstacle
+from heatmap.math import GRID_SIZE, compute_physics_baseline, Obstacle
 
 SIGMA_DEFAULT = 3.0
 

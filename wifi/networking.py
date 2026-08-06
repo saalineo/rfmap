@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 import platform
@@ -8,12 +9,21 @@ import time
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
+logger = logging.getLogger(__name__)
+
 
 POLL_INTERVAL_SECONDS = 1.0
 CONSECUTIVE_FAILURE_LIMIT = 5
 RSSI_MIN_DBM = -95
 RSSI_MAX_DBM = -25
 INFO_POLL_INTERVAL = 10.0
+
+
+def _run_subprocess(cmd: list[str]) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
 
 
 def _read_proc_net_wireless(interface: str) -> float | None:
@@ -32,30 +42,20 @@ def _read_proc_net_wireless(interface: str) -> float | None:
 
 
 def _run_iw_dev_link(interface: str) -> float | None:
-    try:
-        result = subprocess.run(
-            ["iw", "dev", interface, "link"],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r"signal:\s*(-?\d+)\s*dBm", result.stdout)
+    proc = _run_subprocess(["iw", "dev", interface, "link"])
+    if proc:
+        match = re.search(r"signal:\s*(-?\d+)\s*dBm", proc.stdout)
         if match:
             return float(match.group(1))
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return None
     return None
 
 
 def _run_iwconfig(interface: str) -> float | None:
-    try:
-        result = subprocess.run(
-            ["iwconfig", interface],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r"Signal level\s*=\s*(-?\d+)\s*dBm", result.stdout)
+    proc = _run_subprocess(["iwconfig", interface])
+    if proc:
+        match = re.search(r"Signal level\s*=\s*(-?\d+)\s*dBm", proc.stdout)
         if match:
             return float(match.group(1))
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return None
     return None
 
 
@@ -93,59 +93,39 @@ def _rssi_linux() -> float | None:
 
 
 def _rssi_windows() -> float | None:
-    try:
-        result = subprocess.run(
-            ["netsh", "wlan", "show", "interfaces"],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r"Signal\s*:\s*(\d+)%", result.stdout)
+    proc = _run_subprocess(["netsh", "wlan", "show", "interfaces"])
+    if proc:
+        match = re.search(r"Signal\s*:\s*(\d+)%", proc.stdout)
         if match:
             percent = float(match.group(1))
             return (percent / 2.0) - 100.0
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return None
     return None
 
 
 def _get_ssid_from_iw(interface: str) -> str | None:
-    try:
-        result = subprocess.run(
-            ["iw", "dev", interface, "link"],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r"SSID:\s*(.+)", result.stdout)
+    proc = _run_subprocess(["iw", "dev", interface, "link"])
+    if proc:
+        match = re.search(r"SSID:\s*(.+)", proc.stdout)
         if match:
             return match.group(1).strip()
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return None
     return None
 
 
 def _get_ssid_from_iwconfig(interface: str) -> str | None:
-    try:
-        result = subprocess.run(
-            ["iwconfig", interface],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r'ESSID:"(.+?)"', result.stdout)
+    proc = _run_subprocess(["iwconfig", interface])
+    if proc:
+        match = re.search(r'ESSID:"(.+?)"', proc.stdout)
         if match:
             return match.group(1)
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return None
     return None
 
 
 def _get_ssid_windows() -> str | None:
-    try:
-        result = subprocess.run(
-            ["netsh", "wlan", "show", "interfaces"],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r"SSID\s*:\s*(.+)", result.stdout)
+    proc = _run_subprocess(["netsh", "wlan", "show", "interfaces"])
+    if proc:
+        match = re.search(r"SSID\s*:\s*(.+)", proc.stdout)
         if match:
             return match.group(1).strip()
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return None
     return None
 
 
@@ -156,67 +136,55 @@ def _get_ssid_macos() -> str | None:
     )
     if not os.path.exists(path):
         return None
-    try:
-        result = subprocess.run(
-            [path, "-I"],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r"\s+SSID:\s*(.+)", result.stdout)
+    proc = _run_subprocess([path, "-I"])
+    if proc:
+        match = re.search(r"\s+SSID:\s*(.+)", proc.stdout)
         if match:
             return match.group(1).strip()
-    except (subprocess.SubprocessError, OSError):
-        return None
     return None
 
 
 def _get_connected_device_names_linux(interface: str) -> list[str]:
-    try:
-        result = subprocess.run(
-            ["iw", "dev", interface, "station", "dump"],
-            capture_output=True, text=True, timeout=5,
-        )
-        macs = []
-        for line in result.stdout.splitlines():
-            if line.startswith("Station "):
-                mac = line.split()[1]
-                macs.append(mac)
-        name_map: dict[str, str] = {}
-        try:
-            with open("/proc/net/arp") as f:
-                for line in f:
-                    parts = line.split()
-                    if len(parts) >= 4 and parts[3] != "00:00:00:00:00:00":
-                        name_map[parts[3].lower()] = parts[0]
-        except OSError:
-            pass
-        names = []
-        for mac in macs:
-            ip = name_map.get(mac.lower())
-            if ip:
-                try:
-                    import socket
-                    hostname, _, _ = socket.gethostbyaddr(ip)
-                    names.append(hostname.split(".")[0])
-                except Exception:
-                    names.append(mac[-8:])
-            else:
-                names.append(mac[-8:])
-        return names
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+    proc = _run_subprocess(["iw", "dev", interface, "station", "dump"])
+    if proc is None:
         return []
+    macs = []
+    for line in proc.stdout.splitlines():
+        if line.startswith("Station "):
+            mac = line.split()[1]
+            macs.append(mac)
+    name_map: dict[str, str] = {}
+    try:
+        with open("/proc/net/arp") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 4 and parts[3] != "00:00:00:00:00:00":
+                    name_map[parts[3].lower()] = parts[0]
+    except OSError:
+        pass
+    names = []
+    for mac in macs:
+        ip = name_map.get(mac.lower())
+        if ip:
+            try:
+                import socket
+                hostname, _, _ = socket.gethostbyaddr(ip)
+                names.append(hostname.split(".")[0])
+            except Exception as exc:
+                logger.debug("Hostname lookup failed for %s: %s", ip, exc)
+                names.append(mac[-8:])
+        else:
+            names.append(mac[-8:])
+    return names
 
 
 def _get_connected_device_names_windows() -> list[str]:
-    try:
-        result = subprocess.run(
-            ["netsh", "wlan", "show", "hostednetwork"],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r"Number of clients\s*:\s*(\d+)", result.stdout)
+    proc = _run_subprocess(["netsh", "wlan", "show", "hostednetwork"])
+    if proc:
+        match = re.search(r"Number of clients\s*:\s*(\d+)", proc.stdout)
         count = int(match.group(1)) if match else 0
         return [f"Device-{i + 1}" for i in range(count)]
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return []
+    return []
 
 
 def _rssi_macos() -> float | None:
@@ -226,16 +194,11 @@ def _rssi_macos() -> float | None:
     )
     if not os.path.exists(path):
         return None
-    try:
-        result = subprocess.run(
-            [path, "-I"],
-            capture_output=True, text=True, timeout=5,
-        )
-        match = re.search(r"agrCtlRSSI:\s*(-?\d+)", result.stdout)
+    proc = _run_subprocess([path, "-I"])
+    if proc:
+        match = re.search(r"agrCtlRSSI:\s*(-?\d+)", proc.stdout)
         if match:
             return float(match.group(1))
-    except (subprocess.SubprocessError, OSError):
-        return None
     return None
 
 
@@ -361,7 +324,8 @@ class RSSIWorker(QThread):
         while self._running:
             try:
                 rssi = self._current_provider.read()
-            except Exception:
+            except Exception as exc:
+                logger.debug("RSSI read failed: %s", exc)
                 rssi = None
 
             if rssi is not None:
@@ -402,13 +366,13 @@ class RSSIWorker(QThread):
                     ssid = self._current_provider.get_ssid()
                     if ssid is not None:
                         self.ssid_updated.emit(ssid)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("SSID lookup failed: %s", exc)
                 try:
                     devices = self._current_provider.get_connected_devices()
                     self.devices_updated.emit(devices)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Device lookup failed: %s", exc)
 
             for _ in range(int(self._interval / 0.1)):
                 if not self._running:

@@ -3,15 +3,17 @@ from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt, QElapsedTimer
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QComboBox, QLabel, QStatusBar, QFrame,
-    QCheckBox, QSlider,
+    QCheckBox, QSlider, QSplitter, QToolButton,
 )
 
-from processing.matrix_math import GRID_SIZE, Obstacle, estimate_router_position
-from processing.heatmap import gaussian_blob_heatmap
-from presentation.vispy_canvas import HeatmapCanvas
-from theme import QT_STYLESHEET
+from heatmap.math import GRID_SIZE, Obstacle, estimate_router_position
+from heatmap.heatmap import gaussian_blob_heatmap
+from ui.canvas import HeatmapCanvas
+from ui.scanner_panel import SentinelPanel
+from security.ap_scanner import APScanner
+from security.localization import APLocalizer
+from ui.theme import QT_STYLESHEET
 
-# ── Smooth exponential lerp ──────────────────────────────────────────────
 
 class AnimationEngine:
     def __init__(self, speed: float = 3.0):
@@ -40,8 +42,6 @@ class AnimationEngine:
         return self._current
 
 
-# ── Performance monitor ─────────────────────────────────────────────────
-
 class PerformanceMonitor:
     def __init__(self, window: int = 20):
         self._times: list[float] = []
@@ -59,8 +59,6 @@ class PerformanceMonitor:
         avg = sum(self._times) / len(self._times)
         return 1.0 / avg if avg > 0 else 60.0
 
-
-# ── Signal history ring buffer ──────────────────────────────────────────
 
 class SignalHistoryBuffer:
     def __init__(self, maxlen: int = 100):
@@ -84,8 +82,6 @@ class SignalHistoryBuffer:
         self._pos = 0
         self._count = 0
 
-
-# ── Background heatmap computation ──────────────────────────────────────
 
 class HeatmapWorker(QThread):
     result_ready = pyqtSignal(np.ndarray)
@@ -128,8 +124,6 @@ class HeatmapWorker(QThread):
         self._running = False
 
 
-# ── Main window ─────────────────────────────────────────────────────────
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -148,10 +142,19 @@ class MainWindow(QMainWindow):
         self._device_names: list[str] = []
         self._device_positions: list[tuple[float, float]] = []
         self._ssid: str = ""
+        self._survey_mode: bool = False
+        self._survey_target_bssid: str | None = None
+        self._survey_samples: list = []
+        self._last_scan_observations: list = []
+        self._localizer: APLocalizer | None = None
 
         self._animation = AnimationEngine(speed=3.0)
         self._perf = PerformanceMonitor()
         self._history = SignalHistoryBuffer(maxlen=80)
+
+        self._scanner = APScanner()
+        self._scanner.scan_ready.connect(self._on_scan_ready)
+        self._scanner.source_changed.connect(self._on_source_changed)
 
         self._worker = HeatmapWorker()
         self._worker.result_ready.connect(self._on_heatmap_ready)
@@ -159,9 +162,8 @@ class MainWindow(QMainWindow):
         self._debounce = QTimer()
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(150)
-        self._debounce.timeout.connect(self._actually_compute)
+        self._debounce.timeout.connect(self._compute_now)
 
-        # Animation timer
         self._anim_timer = QTimer()
         self._anim_timer.setInterval(33)
         self._anim_timer.timeout.connect(self._on_animation_tick)
@@ -178,12 +180,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QHBoxLayout(central)
 
-        # ── Canvas ────────────────────────────────────────────────
         canvas_container = QVBoxLayout()
         self._canvas = HeatmapCanvas(parent=self)
         canvas_container.addWidget(self._canvas.native)
 
-        # Wire interaction callbacks
         self._canvas.on_click = self._on_grid_click
         self._canvas.on_drag_start = self._on_drag_start
         self._canvas.on_drag_move = self._on_drag_move
@@ -191,12 +191,23 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(canvas_container, stretch=1)
 
-        # ── Keyboard (VisPy events) ───────────────────────────────
         self._canvas.canvas.events.key_press.connect(self._on_vispy_key)
 
-        # ── Right panel ──────────────────────────────────────────
         panel = QVBoxLayout()
         panel.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self._threat_btn = QPushButton("⚡ Threat Scanner")
+        self._threat_btn.setCheckable(True)
+        self._threat_btn.toggled.connect(self._on_threat_toggled)
+        panel.addWidget(self._threat_btn)
+        panel.addSpacing(5)
+
+        self._threat_panel = SentinelPanel()
+        self._threat_panel.scan_requested.connect(self._on_scan_requested)
+        self._threat_panel.survey_started.connect(self._on_survey_started)
+        self._threat_panel.survey_ended.connect(self._on_survey_ended)
+        panel.addWidget(self._threat_panel)
+        self._threat_panel.hide()
 
         panel.addWidget(QLabel("Wall material:"))
         self._mat_combo = QComboBox()
@@ -262,7 +273,75 @@ class MainWindow(QMainWindow):
             "Click = record signal  |  Drag = draw wall  |  Arrows = rotate  |  RSSI updates live"
         )
 
-    # ── Keyboard ──────────────────────────────────────────────────────
+    def _on_threat_toggled(self, checked: bool):
+        if checked:
+            self._threat_panel.show()
+            self._scanner.start()
+        else:
+            self._threat_panel.hide()
+            self._scanner.stop()
+
+    def _on_scan_requested(self):
+        self._scanner.scan_now()
+
+    def _on_scan_ready(self, observations):
+        self._last_scan_observations = observations
+        self._threat_panel.update_from_scan(observations)
+        if self._survey_mode and self._survey_target_bssid:
+            target_obs = next(
+                (o for o in observations if o.bssid == self._survey_target_bssid),
+                None,
+            )
+            if target_obs:
+                self._threat_panel.set_status(
+                    f"SURVEY: {self._survey_target_bssid} — RSSI {target_obs.rssi:.1f} dBm"
+                )
+
+    def _on_source_changed(self, desc: str):
+        self._threat_panel.set_status(f"Scanner: {desc}")
+
+    def _on_survey_started(self, bssid: str):
+        self._survey_mode = True
+        self._survey_target_bssid = bssid
+        self._survey_samples = []
+        self._localizer = APLocalizer(bssid)
+        self._status.showMessage(f"SURVEY MODE: {bssid} — click floor to record samples")
+
+    def _on_survey_ended(self):
+        self._survey_mode = False
+        self._survey_target_bssid = None
+        self._localizer = None
+        self._status.showMessage("Survey mode ended.")
+
+    def _on_survey_click(self, x: float, y: float):
+        if not self._survey_mode or not self._survey_target_bssid:
+            return
+        target = next(
+            (o for o in self._last_scan_observations if o.bssid == self._survey_target_bssid),
+            None,
+        )
+        if target is None:
+            self._status.showMessage("Target AP not visible in last scan — cannot record")
+            return
+        if target.rssi < -95.0:
+            self._status.showMessage("RSSI too weak to record sample")
+            return
+        ix, iy = self._get_grid(x, y)
+        from security.types import SurveySample
+        sample = SurveySample(
+            bssid=target.bssid,
+            x=float(ix),
+            y=float(iy),
+            rssi=target.rssi,
+            channel=target.channel,
+        )
+        if self._localizer is not None:
+            self._localizer.add_sample(sample)
+        self._survey_samples.append(sample)
+        self._threat_panel.set_survey_sample_count(len(self._survey_samples))
+        self._status.showMessage(
+            f"SURVEY: ({ix:.0f}, {iy:.0f}) RSSI {target.rssi:.1f} dBm — {len(self._survey_samples)} samples"
+        )
 
     def _on_vispy_key(self, event):
         step = 5
@@ -276,7 +355,6 @@ class MainWindow(QMainWindow):
             de, da = mapping[event.key]
             self._canvas.rotate(de, da)
 
-    # ── Mouse interaction ─────────────────────────────────────────────
 
     def _get_grid(self, x: float, y: float) -> tuple[int, int]:
         ix = max(0, min(GRID_SIZE - 1, int(round(x))))
@@ -284,6 +362,9 @@ class MainWindow(QMainWindow):
         return ix, iy
 
     def _on_grid_click(self, x: float, y: float):
+        if self._survey_mode:
+            self._on_survey_click(x, y)
+            return
         ix, iy = self._get_grid(x, y)
         self._add_point(float(ix), float(iy))
 
@@ -308,7 +389,6 @@ class MainWindow(QMainWindow):
         if dx > 1 or dy > 1:
             self._add_wall(sx, sy, float(ix), float(iy))
 
-    # ── Add data point ────────────────────────────────────────────────
 
     def _add_point(self, x: float, y: float, quiet: bool = False):
         if self._current_rssi is None:
@@ -325,7 +405,6 @@ class MainWindow(QMainWindow):
             )
         self._compute_now()
 
-    # ── Add wall ──────────────────────────────────────────────────────
 
     def _add_wall(self, x1: float, y1: float, x2: float, y2: float):
         mat = self._mat_combo.currentText()
@@ -334,8 +413,6 @@ class MainWindow(QMainWindow):
             f"Wall: ({x1:.0f},{y1:.0f}) → ({x2:.0f},{y2:.0f}) [{mat}]"
         )
         self._request_compute()
-
-    # ── Router ────────────────────────────────────────────────────────
 
     def _update_router(self):
         if not self._measured_points:
@@ -347,7 +424,6 @@ class MainWindow(QMainWindow):
             self._router_lbl.setText(f"Router: ({est[0]:.0f}, {est[1]:.0f})")
         self._update_device_positions()
 
-    # ── Info from networking ──────────────────────────────────────────
 
     def update_ssid(self, ssid: str):
         self._ssid = ssid
@@ -367,7 +443,6 @@ class MainWindow(QMainWindow):
         self._update_device_positions()
 
     def _update_device_positions(self):
-        """Generate simulated device positions clustered around router."""
         import random
         count = len(self._device_names)
         if count < 1 or self._router_xy is None:
@@ -384,7 +459,6 @@ class MainWindow(QMainWindow):
             positions.append((float(x), float(y)))
         self._device_positions = positions
 
-    # ── RSSI ──────────────────────────────────────────────────────────
 
     def update_rssi(self, rssi: float, source: str):
         changed = self._current_rssi is None or abs(rssi - self._current_rssi) > 1.0
@@ -393,29 +467,22 @@ class MainWindow(QMainWindow):
         self._history.push(rssi)
         self._canvas.update_waterfall(rssi)
         if changed:
-            # Real-time: update last measured point's RSSI with live reading
             if self._measured_points:
                 x, y, _ = self._measured_points[-1]
                 self._measured_points[-1] = (x, y, rssi)
                 self._update_router()
-                self._actually_compute()
+                self._compute_now()
             elif self._router_xy is not None:
-                self._actually_compute()
+                self._compute_now()
 
     def update_source(self, desc: str):
         self._source_lbl.setText(f"Source: {desc}")
 
-    # ── Compute ───────────────────────────────────────────────────────
 
     def _request_compute(self):
         self._debounce.start()
 
     def _compute_now(self):
-        if self._router_xy is None and not self._measured_points:
-            return
-        self._worker.request(self._router_xy, self._obstacles, self._measured_points)
-
-    def _actually_compute(self):
         if self._router_xy is None and not self._measured_points:
             return
         self._worker.request(self._router_xy, self._obstacles, self._measured_points)
@@ -440,7 +507,6 @@ class MainWindow(QMainWindow):
             self._anim_elapsed.start()
             self._anim_timer.start()
 
-    # ── Animation tick ────────────────────────────────────────────────
 
     def _on_animation_tick(self):
         delta = self._anim_elapsed.elapsed() / 1000.0
@@ -450,7 +516,6 @@ class MainWindow(QMainWindow):
         fps = self._perf.fps
         self._fps_lbl.setText(f"FPS: {fps:.0f}")
 
-    # ── Auto-sample ──────────────────────────────────────────────────
 
     def _on_auto_toggled(self, checked: bool):
         if checked:
@@ -472,19 +537,15 @@ class MainWindow(QMainWindow):
         ny = max(0.0, min(float(GRID_SIZE - 1), ly + random.uniform(-5, 5)))
         self._add_point(nx, ny, quiet=True)
 
-    # ── Demo data ─────────────────────────────────────────────────────
-
     def _on_demo(self):
         import random
         self._on_reset()
-        rx, ry = GRID_SIZE * 0.3, GRID_SIZE * 0.4  # simulated router position
+        rx, ry = GRID_SIZE * 0.3, GRID_SIZE * 0.4  
         for _ in range(20):
-            # Points concentrated near the router with signal falling off
             angle = random.uniform(0, 2 * 3.14159)
             dist = random.uniform(1, 35)
             x = max(0, min(GRID_SIZE - 1, rx + dist * np.cos(angle)))
             y = max(0, min(GRID_SIZE - 1, ry + dist * np.sin(angle)))
-            # Simulate RSSI: strongest near router, fading with distance
             rssi = max(-85, min(-35, -30 - 10 * np.log10(max(1, dist * 0.5))))
             self._measured_points.append((float(x), float(y), rssi))
         self._point_lbl.setText(f"Data points: {len(self._measured_points)}")
@@ -494,7 +555,6 @@ class MainWindow(QMainWindow):
         )
         self._compute_now()
 
-    # ── Reset ─────────────────────────────────────────────────────────
 
     def _on_reset(self):
         if hasattr(self, "_auto_timer"):
@@ -515,7 +575,6 @@ class MainWindow(QMainWindow):
         self._canvas.render(empty, [], None, device_positions=[], device_names=[])
         self._status.showMessage("All data cleared.")
 
-    # ── Cleanup ───────────────────────────────────────────────────────
 
     def closeEvent(self, event):
         if hasattr(self, "_auto_timer"):
@@ -523,4 +582,5 @@ class MainWindow(QMainWindow):
         self._anim_timer.stop()
         self._worker.quit()
         self._worker.wait()
+        self._scanner.stop()
         super().closeEvent(event)

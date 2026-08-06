@@ -1,12 +1,17 @@
+import logging
+import numpy as np
 from vispy import scene
 from vispy.scene import visuals
 from vispy.color import Colormap
 from vispy.geometry import create_grid_mesh
 from vispy.visuals.transforms import STTransform
-import numpy as np
 
-from processing.matrix_math import GRID_SIZE, Obstacle
-from processing.colormap import SIGNAL_CMAP_COLORS, SIGNAL_CMAP_CONTROLS
+logger = logging.getLogger(__name__)
+
+from heatmap.math import GRID_SIZE, Obstacle
+from heatmap.colormap import SIGNAL_CMAP_COLORS, SIGNAL_CMAP_CONTROLS
+from ui.rogue_overlay import RogueOverlay
+from security.types import LocalizationFix
 
 SIGNAL_VISPY_CMAP = Colormap(
     SIGNAL_CMAP_COLORS,
@@ -65,6 +70,8 @@ class HeatmapCanvas:
         self._surf_Y: np.ndarray | None = None
         self._surf_faces: np.ndarray | None = None
 
+        self._rogue_overlay: RogueOverlay | None = None
+
         self.on_click: callable = lambda x, y: None
         self.on_drag_start: callable = lambda x, y: None
         self.on_drag_move: callable = lambda x, y: None
@@ -107,7 +114,8 @@ class HeatmapCanvas:
         try:
             near = tr.imap([ndc_x, ndc_y, -1, 1])
             far = tr.imap([ndc_x, ndc_y, 1, 1])
-        except Exception:
+        except Exception as exc:
+            logger.debug("Camera transform failed: %s", exc)
             return None
         if near is None or far is None:
             return None
@@ -154,6 +162,7 @@ class HeatmapCanvas:
         router_xy: tuple[float, float] | None,
         device_positions: list[tuple[float, float]] | None = None,
         device_names: list[str] | None = None,
+        fix: LocalizationFix | None = None,
     ):
         Z = heatmap.astype(np.float32)
 
@@ -161,6 +170,14 @@ class HeatmapCanvas:
         self._update_walls(obstacles)
         self._update_router(router_xy, Z)
         self._update_device_markers(device_positions, device_names, Z)
+
+        if fix is not None:
+            if self._rogue_overlay is None:
+                self._rogue_overlay = RogueOverlay(self.view)
+            self._rogue_overlay.set_fix(fix)
+        elif self._rogue_overlay is not None:
+            self._rogue_overlay.set_fix(None)
+
         self.canvas.update()
 
         self._surf_X = self._surf_Y = self._surf_faces = None

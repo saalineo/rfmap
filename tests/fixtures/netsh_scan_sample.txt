@@ -1,0 +1,14 @@
+SSID 1 : MyCorp
+    Network type            : Infrastructure
+    Authentication          : WPA2-Personal
+    Encryption              : CCMP
+    BSSID 1                 : 00:11:22:33:44:55
+         Signal             : 82%
+    BSSID 2                 : 00:11:22:33:44:66
+         Signal             : 45%
+SSID 2 : GuestNet
+    Network type            : Infrastructure
+    Authentication          : Open
+    Encryption              : None
+    BSSID 1                 : aa:bb:cc:dd:ee:01
+         Signal             : 60%
