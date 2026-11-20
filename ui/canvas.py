@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+from PyQt6.QtGui import QImage
 from vispy import scene
 from vispy.scene import visuals
 from vispy.color import Colormap
@@ -47,6 +48,8 @@ class HeatmapCanvas:
 
         self._floor_grid: visuals.Line | None = None
         self._build_floor_grid()
+        self._floorplan: visuals.Image | None = None
+        self._floorplan_loaded = False
 
         self._surf: visuals.Mesh | None = None
         self._wall_nodes: list = []
@@ -80,6 +83,30 @@ class HeatmapCanvas:
         self.canvas.events.mouse_press.connect(self._on_mouse_press)
         self.canvas.events.mouse_move.connect(self._on_mouse_move)
         self.canvas.events.mouse_release.connect(self._on_mouse_release)
+
+    def set_floorplan(self, path: str) -> bool:
+        """Place an image underneath the heat surface, scaled to the survey grid."""
+        image = QImage(path).convertToFormat(QImage.Format.Format_RGBA8888)
+        if image.isNull():
+            return False
+
+        image_bits = image.bits()
+        image_bits.setsize(image.sizeInBytes())
+        raw = np.frombuffer(image_bits, dtype=np.uint8)
+        rows = raw.reshape((image.height(), image.bytesPerLine()))
+        pixels = rows[:, : image.width() * 4].reshape((image.height(), image.width(), 4)).copy()
+        if self._floorplan is None:
+            self._floorplan = visuals.Image(pixels, parent=self.view.scene, interpolation="nearest")
+        else:
+            self._floorplan.set_data(pixels)
+        self._floorplan.transform = STTransform(
+            scale=(GRID_SIZE / image.width(), GRID_SIZE / image.height(), 1),
+            translate=(0, 0, FLOOR_Z - 0.5),
+        )
+        self._floorplan.opacity = 0.45
+        self._floorplan_loaded = True
+        self.canvas.update()
+        return True
 
     def _build_floor_grid(self):
         segs: list = []
@@ -164,7 +191,8 @@ class HeatmapCanvas:
         device_names: list[str] | None = None,
         fix: LocalizationFix | None = None,
     ):
-        Z = heatmap.astype(np.float32)
+        # Heatmap arrays are indexed [x, y]; VisPy grid vertices are [y, x].
+        Z = heatmap.T.astype(np.float32)
 
         self._update_surface(Z)
         self._update_walls(obstacles)
@@ -197,7 +225,8 @@ class HeatmapCanvas:
 
         norm = np.clip((Z - (-90.0)) / 60.0, 0.0, 1.0)
         colors = SIGNAL_VISPY_CMAP[norm.ravel()].rgba.copy()
-        colors[:, 3] = 1.0
+        # Let an imported plan remain readable underneath the signal surface.
+        colors[:, 3] = 0.76 if self._floorplan_loaded else 1.0
 
         if self._surf is None:
             self._surf = visuals.Mesh(

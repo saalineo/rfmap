@@ -11,9 +11,11 @@ from PyQt6.QtWidgets import (
 )
 
 from security.config import SentinelConfig
-from security.types import APObservation, RogueReport
+from security.types import APObservation, RogueReport, SentryLogEntry
 from security.allowlist import WhitelistStore
 from security.sessions import SessionStore
+from security.sentry_engine import SentryEngine, calculate_trust_score
+from security.deauth_detector import DeauthDetector
 from ui.theme import BG_DARK, BG_SURFACE, BG_BORDER, FG, FG_MUTED, RED, YELLOW, GREEN, BLUE
 
 
@@ -27,6 +29,8 @@ class SentinelPanel(QWidget):
     survey_started = pyqtSignal(str)
     survey_ended = pyqtSignal()
     whitelist_changed = pyqtSignal()
+    sentry_alert = pyqtSignal(object)
+    export_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,9 +38,15 @@ class SentinelPanel(QWidget):
         self._whitelist = WhitelistStore(self._config.whitelist_path)
         self._observations: list[APObservation] = []
         self._alerts: list[RogueReport] = []
+        self._reports_dict: dict[str, RogueReport] = {}
         self._target_bssid: str | None = None
         self._survey_active = False
         self._sample_count = 0
+
+        self._sentry_engine = SentryEngine(self._whitelist, alert_callback=self._on_sentry_log_entry)
+        self._deauth_detector = DeauthDetector()
+        self._simulated_deauth_active = False
+        self._sentry_active = False
 
         self._build_ui()
         self._apply_config()
@@ -45,6 +55,46 @@ class SentinelPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
+
+        # Trust Score Banner & Sentry Control Frame
+        trust_frame = QFrame()
+        trust_frame.setStyleSheet(
+            f"background-color: {BG_SURFACE}; border: 1px solid {BG_BORDER}; border-radius: 6px; padding: 6px;"
+        )
+        trust_l = QVBoxLayout(trust_frame)
+        trust_l.setContentsMargins(4, 4, 4, 4)
+        trust_l.setSpacing(4)
+
+        header_l = QHBoxLayout()
+        self._trust_score_badge = QLabel("🛡 Trust Score: 100 / 100")
+        self._trust_score_badge.setStyleSheet(
+            f"font-size: 14px; font-weight: bold; color: {STATUS_GREEN};"
+        )
+        header_l.addWidget(self._trust_score_badge)
+
+        self._sentry_toggle = QPushButton("🛡 SENTRY: OFF")
+        self._sentry_toggle.setCheckable(True)
+        self._sentry_toggle.setStyleSheet(
+            f"background-color: {BG_DARK}; color: {FG}; border: 1px solid {BG_BORDER}; font-weight: bold; padding: 4px 8px;"
+        )
+        self._sentry_toggle.toggled.connect(self._on_sentry_toggled)
+        header_l.addWidget(self._sentry_toggle)
+
+        trust_l.addLayout(header_l)
+
+        self._trust_details_lbl = QLabel("Environment Status: Secure")
+        self._trust_details_lbl.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px;")
+        trust_l.addWidget(self._trust_details_lbl)
+
+        deauth_notice = QLabel(
+            "Deauth monitoring is unavailable: RFMap does not capture monitor-mode frames."
+        )
+        deauth_notice.setWordWrap(True)
+        deauth_notice.setToolTip(
+            "Use a dedicated monitor-mode capture tool for deauthentication-frame analysis."
+        )
+        trust_l.addWidget(deauth_notice)
+        layout.addWidget(trust_frame)
 
         # Alert banner 
         self._alert_banner = QLabel("")
@@ -100,7 +150,7 @@ class SentinelPanel(QWidget):
         btn_layout.addWidget(self._end_survey_btn)
 
         self._export_btn = QPushButton("Export Session")
-        self._export_btn.clicked.connect(self._on_export)
+        self._export_btn.clicked.connect(self.export_requested.emit)
         btn_layout.addWidget(self._export_btn)
 
         self._wl_btn = QPushButton("Whitelist…")
@@ -132,8 +182,14 @@ class SentinelPanel(QWidget):
         # Whitelist list
         layout.addWidget(QLabel("Whitelist:"))
         self._wl_list = QListWidget()
-        self._wl_list.setMaximumHeight(120)
+        self._wl_list.setMaximumHeight(80)
         layout.addWidget(self._wl_list)
+
+        # Sentry Event Audit Log
+        layout.addWidget(QLabel("Sentry Event Log:"))
+        self._sentry_log_list = QListWidget()
+        self._sentry_log_list.setMaximumHeight(100)
+        layout.addWidget(self._sentry_log_list)
 
         #Status
         self._status_lbl = QLabel("Ready")
@@ -185,6 +241,7 @@ class SentinelPanel(QWidget):
             self._table.setItem(row, 4, sec_item)
 
             rssi_item = QTableWidgetItem(f"{obs.rssi:.1f}")
+            rssi_item.setData(Qt.ItemDataRole.EditRole, obs.rssi)
             self._table.setItem(row, 5, rssi_item)
 
         # Update target combo
@@ -199,6 +256,7 @@ class SentinelPanel(QWidget):
 
     def update_alerts(self, alerts: list[RogueReport]):
         self._alerts = alerts
+        self._reports_dict = {a.bssid: a for a in alerts}
         # Update status dots
         for row in range(self._table.rowCount()):
             bssid_item = self._table.item(row, 2)
@@ -225,19 +283,104 @@ class SentinelPanel(QWidget):
                 dot_item.setForeground(GREEN)
                 dot_item.setText("●")
 
+        # Process Sentry Engine scans & recalculate trust score
+        deauth_active = self._deauth_detector.poll_deauth_burst() or self._simulated_deauth_active
+        if self._sentry_active:
+            new_events = self._sentry_engine.process_scan(self._observations, self._reports_dict, deauth_burst=deauth_active)
+
+        score, breakdown = calculate_trust_score(self._observations, self._reports_dict, deauth_burst_active=deauth_active)
+        self._update_trust_score_ui(score, breakdown)
+
         # Show alert banner for rogue alerts
         rogue_alerts = [a for a in alerts if a.classification == "rogue"]
-        if rogue_alerts:
-            self._alert_banner.setText(
-                f"⚠ ROGUE DETECTED: {len(rogue_alerts)} network(s) flagged — "
-                f"{rogue_alerts[0].ssid or '(hidden)'}"
-            )
+        if rogue_alerts or deauth_active:
+            banner_msg = "⚠ SECURITY ALERT: "
+            if deauth_active:
+                banner_msg += "Deauth burst detected! "
+            if rogue_alerts:
+                banner_msg += f"{len(rogue_alerts)} Rogue AP(s) flagged ({rogue_alerts[0].ssid or '(hidden)'})"
+            self._alert_banner.setText(banner_msg)
             self._alert_banner.show()
         else:
             self._alert_banner.hide()
 
+    def _update_trust_score_ui(self, score: int, breakdown: list[str]):
+        if score >= 80:
+            color = STATUS_GREEN
+        elif score >= 50:
+            color = STATUS_AMBER
+        else:
+            color = STATUS_RED
+
+        self._trust_score_badge.setText(f"🛡 Trust Score: {score} / 100")
+        self._trust_score_badge.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {color};")
+
+        if breakdown:
+            self._trust_details_lbl.setText("Issues: " + " | ".join(breakdown[:2]))
+            self._trust_details_lbl.setToolTip("\n".join(breakdown))
+        else:
+            self._trust_details_lbl.setText("Environment Status: Secure (No threats detected)")
+            self._trust_details_lbl.setToolTip("All APs trusted and encrypted")
+
+    def _on_sentry_toggled(self, checked: bool):
+        self._sentry_active = checked
+        if checked:
+            self._sentry_toggle.setText("🛡 SENTRY: ON")
+            self._sentry_toggle.setStyleSheet(
+                f"background-color: {RED}; color: {BG_DARK}; border: 1px solid {RED}; font-weight: bold; padding: 4px 8px;"
+            )
+            self._status_lbl.setText("Continuous Sentry Mode ACTIVE — Scanning every few seconds...")
+        else:
+            self._sentry_toggle.setText("🛡 SENTRY: OFF")
+            self._sentry_toggle.setStyleSheet(
+                f"background-color: {BG_DARK}; color: {FG}; border: 1px solid {BG_BORDER}; font-weight: bold; padding: 4px 8px;"
+            )
+            self._status_lbl.setText("Sentry Mode deactivated")
+
+    def _on_deauth_toggled(self, checked: bool):
+        if checked:
+            self._deauth_detector.start_monitoring()
+            self._status_lbl.setText("Monitor Mode Deauth Detection STARTED")
+        else:
+            self._deauth_detector.stop_monitoring()
+            self._status_lbl.setText("Monitor Mode Deauth Detection STOPPED")
+
+    def _on_sim_deauth(self):
+        self._simulated_deauth_active = True
+        self._deauth_detector.check_simulated(trigger=True)
+        QMessageBox.warning(self, "Deauth Burst Simulated", "A 802.11 Deauthentication Packet Burst attack has been simulated!")
+        QTimer.singleShot(5000, self._reset_sim_deauth)
+        self.update_alerts(self._alerts)
+
+    def _reset_sim_deauth(self):
+        self._simulated_deauth_active = False
+        self.update_alerts(self._alerts)
+
+    def _on_sentry_log_entry(self, entry: SentryLogEntry):
+        time_str = datetime.fromtimestamp(entry.timestamp).strftime("%H:%M:%S")
+        item_text = f"[{time_str}] [{entry.severity}] {entry.event_type}: {entry.details}"
+        item = QListWidgetItem(item_text)
+        if entry.severity == "HIGH":
+            item.setForeground(RED)
+        elif entry.severity == "MEDIUM":
+            item.setForeground(YELLOW)
+        self._sentry_log_list.insertItem(0, item)
+
+        # Trigger System Audio/Visual Alarm
+        try:
+            from PyQt6.QtWidgets import QApplication
+            QApplication.beep()
+        except Exception:
+            pass
+
     def get_target_bssid(self) -> str | None:
         return self._target_combo.currentData() or None
+
+    def set_target_bssid(self, bssid: str | None):
+        """Keep the scanner survey target aligned with the primary survey control."""
+        index = self._target_combo.findData(bssid)
+        if index >= 0:
+            self._target_combo.setCurrentIndex(index)
 
     def _on_begin_survey(self):
         target = self.get_target_bssid()
@@ -267,23 +410,11 @@ class SentinelPanel(QWidget):
 
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Whitelist")
-        dialog.setText(f"Whitelist entries ({len(entries)}):\n\n" + "\n".join(items) +
-                       "\n\nUse the main window's Whitelist dialog to add/remove entries.")
-        dialog.exec()
-
-    def _on_export(self):
-        if not self._observations:
-            self._status_lbl.setText("No scan data to export")
-            return
-        dir_path = QFileDialog.getExistingDirectory(self, "Export Session To")
-        if not dir_path:
-            return
-        store = SessionStore(dir_path)
-        store.save_session(
-            [], [], [],
-            {"scanner_source": "simulated" if self._observations and self._observations[0].source == "simulated" else "real"},
+        dialog.setText(
+            f"Whitelist entries ({len(entries)}):\n\n" + "\n".join(items) +
+            f"\n\nEdit {self._config.whitelist_path} to add or remove entries, then restart RFMap."
         )
-        self._status_lbl.setText(f"Session exported to {dir_path}")
+        dialog.exec()
 
     def _refresh_whitelist(self):
         self._wl_list.clear()

@@ -3,14 +3,17 @@ from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt, QElapsedTimer
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QComboBox, QLabel, QStatusBar, QFrame,
-    QCheckBox, QSlider, QSplitter, QToolButton,
+    QCheckBox, QSlider, QSplitter, QToolButton, QDoubleSpinBox,
+    QFileDialog, QMessageBox,
 )
 
-from heatmap.math import GRID_SIZE, Obstacle, estimate_router_position
+from heatmap.math import CELL_METERS, GRID_SIZE, Obstacle, estimate_router_position
 from heatmap.heatmap import gaussian_blob_heatmap
 from ui.canvas import HeatmapCanvas
 from ui.scanner_panel import SentinelPanel
 from security.ap_scanner import APScanner
+from security.sessions import SessionStore
+from wifi.networking import RSSIProvider
 from security.localization import APLocalizer
 from ui.theme import QT_STYLESHEET
 
@@ -93,16 +96,19 @@ class HeatmapWorker(QThread):
         self._measured_points: list[tuple[float, float, float]] = []
         self._pending = False
         self._running = False
+        self._cell_meters = CELL_METERS
 
     def request(
         self,
         router_xy: tuple[float, float] | None,
         obstacles: list[Obstacle],
         measured_points: list[tuple[float, float, float]],
+        cell_meters: float,
     ):
         self._router_xy = router_xy
         self._obstacles = list(obstacles)
         self._measured_points = list(measured_points)
+        self._cell_meters = cell_meters
         if self._running:
             self._pending = True
         else:
@@ -116,7 +122,9 @@ class HeatmapWorker(QThread):
             measured = self._measured_points
             self._pending = False
 
-            heatmap = gaussian_blob_heatmap(measured, router_xy, obstacles)
+            heatmap = gaussian_blob_heatmap(
+                measured, router_xy, obstacles, cell_meters=self._cell_meters
+            )
             self.result_ready.emit(heatmap)
 
             if not self._pending:
@@ -127,7 +135,7 @@ class HeatmapWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Wavey — 3D Wi-Fi Signal Mapper")
+        self.setWindowTitle("RFMap — Wi-Fi Survey Mapper")
         self.setMinimumSize(1200, 800)
 
         self._router_xy: tuple[float, float] | None = None
@@ -145,8 +153,13 @@ class MainWindow(QMainWindow):
         self._survey_mode: bool = False
         self._survey_target_bssid: str | None = None
         self._survey_samples: list = []
+        self._survey_fix = None
         self._last_scan_observations: list = []
         self._localizer: APLocalizer | None = None
+        self._rssi_worker = None
+        self._cell_meters = CELL_METERS
+        self._selected_ap_bssid: str | None = None
+        self._data_mode = "live"
 
         self._animation = AnimationEngine(speed=3.0)
         self._perf = PerformanceMonitor()
@@ -206,6 +219,7 @@ class MainWindow(QMainWindow):
         self._threat_panel.scan_requested.connect(self._on_scan_requested)
         self._threat_panel.survey_started.connect(self._on_survey_started)
         self._threat_panel.survey_ended.connect(self._on_survey_ended)
+        self._threat_panel.export_requested.connect(self._on_export_requested)
         panel.addWidget(self._threat_panel)
         self._threat_panel.hide()
 
@@ -214,6 +228,56 @@ class MainWindow(QMainWindow):
         self._mat_combo.addItems(["Drywall", "Brick", "Reinforced Concrete"])
         panel.addWidget(self._mat_combo)
         panel.addSpacing(15)
+
+        floorplan_frame = QFrame()
+        floorplan_layout = QVBoxLayout(floorplan_frame)
+        floorplan_layout.addWidget(QLabel("Survey setup"))
+        floorplan_btn = QPushButton("Import Floor Plan…")
+        floorplan_btn.clicked.connect(self._on_import_floorplan)
+        floorplan_layout.addWidget(floorplan_btn)
+        self._floorplan_lbl = QLabel("Floor plan: none")
+        self._floorplan_lbl.setWordWrap(True)
+        floorplan_layout.addWidget(self._floorplan_lbl)
+        scale_layout = QHBoxLayout()
+        scale_layout.addWidget(QLabel("Scale:"))
+        self._scale_spin = QDoubleSpinBox()
+        self._scale_spin.setRange(0.01, 100.0)
+        self._scale_spin.setDecimals(2)
+        self._scale_spin.setSuffix(" m/grid")
+        self._scale_spin.setValue(self._cell_meters)
+        self._scale_spin.setAccessibleName("Floor plan scale in metres per grid cell")
+        self._scale_spin.valueChanged.connect(self._on_scale_changed)
+        scale_layout.addWidget(self._scale_spin)
+        floorplan_layout.addLayout(scale_layout)
+        self._scale_lbl = QLabel()
+        floorplan_layout.addWidget(self._scale_lbl)
+        self._update_scale_label()
+        panel.addWidget(floorplan_frame)
+        panel.addSpacing(10)
+
+        adapter_layout = QHBoxLayout()
+        adapter_layout.addWidget(QLabel("Adapter:"))
+        self._adapter_combo = QComboBox()
+        self._adapter_combo.setAccessibleName("Wi-Fi adapter")
+        self._adapter_combo.addItem("Auto", None)
+        for interface in RSSIProvider().available_interfaces():
+            self._adapter_combo.addItem(interface, interface)
+        self._adapter_combo.currentIndexChanged.connect(self._on_adapter_changed)
+        adapter_layout.addWidget(self._adapter_combo)
+        panel.addLayout(adapter_layout)
+
+        target_layout = QHBoxLayout()
+        target_layout.addWidget(QLabel("Survey AP:"))
+        self._ap_combo = QComboBox()
+        self._ap_combo.addItem("Connected network", None)
+        self._ap_combo.setAccessibleName("Access point used for survey measurements")
+        self._ap_combo.currentIndexChanged.connect(self._on_selected_ap_changed)
+        target_layout.addWidget(self._ap_combo)
+        panel.addLayout(target_layout)
+        refresh_aps_btn = QPushButton("Refresh Access Points")
+        refresh_aps_btn.clicked.connect(self._on_scan_requested)
+        panel.addWidget(refresh_aps_btn)
+        panel.addSpacing(10)
 
         self._auto_cb = QCheckBox("Auto-sample")
         self._auto_cb.toggled.connect(self._on_auto_toggled)
@@ -257,7 +321,7 @@ class MainWindow(QMainWindow):
         panel.addWidget(lerp_frame)
 
         panel.addSpacing(10)
-        demo_btn = QPushButton("Demo Data (20 pts)")
+        demo_btn = QPushButton("Load DEMO Data (20 pts)")
         demo_btn.clicked.connect(self._on_demo)
         panel.addWidget(demo_btn)
         panel.addSpacing(5)
@@ -266,6 +330,15 @@ class MainWindow(QMainWindow):
         panel.addWidget(reset_btn)
         panel.addStretch()
         layout.addLayout(panel, stretch=0)
+
+        self._demo_banner = QLabel(
+            "DEMO DATA — this heatmap is simulated and must not be used for a real survey. Clear it before recording live measurements."
+        )
+        self._demo_banner.setWordWrap(True)
+        self._demo_banner.setProperty("rfmapRole", "demoWarning")
+        self._demo_banner.setAccessibleName("Demo data warning")
+        self._demo_banner.hide()
+        canvas_container.insertWidget(0, self._demo_banner)
 
         self._status = QStatusBar()
         self.setStatusBar(self._status)
@@ -276,17 +349,29 @@ class MainWindow(QMainWindow):
     def _on_threat_toggled(self, checked: bool):
         if checked:
             self._threat_panel.show()
-            self._scanner.start()
+            self._on_scan_requested()
         else:
             self._threat_panel.hide()
             self._scanner.stop()
+            self._scanner.wait()
 
     def _on_scan_requested(self):
+        if not self._scanner.isRunning():
+            self._scanner.start()
         self._scanner.scan_now()
 
     def _on_scan_ready(self, observations):
         self._last_scan_observations = observations
         self._threat_panel.update_from_scan(observations)
+        self._refresh_ap_selector(observations)
+
+        # Run RogueDetector classification
+        from security.detection import RogueDetector
+        if not hasattr(self, "_rogue_detector") or self._rogue_detector is None:
+            self._rogue_detector = RogueDetector(self._threat_panel._whitelist)
+        reports = self._rogue_detector.classify(observations)
+        self._threat_panel.update_alerts(list(reports.values()))
+
         if self._survey_mode and self._survey_target_bssid:
             target_obs = next(
                 (o for o in observations if o.bssid == self._survey_target_bssid),
@@ -299,11 +384,94 @@ class MainWindow(QMainWindow):
 
     def _on_source_changed(self, desc: str):
         self._threat_panel.set_status(f"Scanner: {desc}")
+        self._status.showMessage(desc)
+
+    def attach_rssi_worker(self, worker):
+        """Connect adapter selection after the application creates its RSSI worker."""
+        self._rssi_worker = worker
+        self._on_adapter_changed(self._adapter_combo.currentIndex())
+
+    def _on_adapter_changed(self, _index: int):
+        interface = self._adapter_combo.currentData()
+        self._scanner.set_interface(interface)
+        if self._rssi_worker is not None:
+            self._rssi_worker.set_interface(interface)
+
+    def _refresh_ap_selector(self, observations):
+        selected = self._selected_ap_bssid
+        self._ap_combo.blockSignals(True)
+        self._ap_combo.clear()
+        self._ap_combo.addItem("Connected network", None)
+        for observation in observations:
+            name = observation.ssid or "(hidden)"
+            self._ap_combo.addItem(
+                f"{name} · {observation.bssid} · {observation.rssi:.0f} dBm",
+                observation.bssid,
+            )
+        index = self._ap_combo.findData(selected)
+        self._ap_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._ap_combo.blockSignals(False)
+        self._on_selected_ap_changed(self._ap_combo.currentIndex())
+
+    def _on_selected_ap_changed(self, _index: int):
+        self._selected_ap_bssid = self._ap_combo.currentData()
+        self._threat_panel.set_target_bssid(self._selected_ap_bssid)
+        if self._selected_ap_bssid:
+            self._status.showMessage(
+                "Selected AP readings update when access points are refreshed."
+            )
+
+    def _selected_ap_rssi(self) -> float | None:
+        if not self._selected_ap_bssid:
+            return self._current_rssi
+        target = next(
+            (obs for obs in self._last_scan_observations if obs.bssid == self._selected_ap_bssid),
+            None,
+        )
+        if target is None:
+            return None
+        if target.source == "simulated":
+            self._show_demo_warning("SIMULATED ACCESS-POINT DATA")
+            return None
+        return target.rssi
+
+    def _on_import_floorplan(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Floor Plan",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)",
+        )
+        if not path:
+            return
+        if not self._canvas.set_floorplan(path):
+            QMessageBox.warning(self, "RFMap", "RFMap could not open that floor-plan image.")
+            return
+        from pathlib import Path
+        self._floorplan_lbl.setText(f"Floor plan: {Path(path).name}")
+        self._status.showMessage("Floor plan imported. Set its scale before recording measurements.")
+
+    def _update_scale_label(self):
+        width_m = GRID_SIZE * self._cell_meters
+        self._scale_lbl.setText(f"Map size: {width_m:.1f} × {width_m:.1f} m")
+
+    def _on_scale_changed(self, value: float):
+        self._cell_meters = value
+        self._update_scale_label()
+        self._request_compute()
+
+    def _show_demo_warning(self, title: str = "DEMO DATA"):
+        self._demo_banner.setText(
+            f"{title} — this heatmap is simulated and must not be used for a real survey. "
+            "Clear it before recording live measurements."
+        )
+        self._demo_banner.show()
 
     def _on_survey_started(self, bssid: str):
         self._survey_mode = True
         self._survey_target_bssid = bssid
         self._survey_samples = []
+        self._survey_fix = None
         self._localizer = APLocalizer(bssid)
         self._status.showMessage(f"SURVEY MODE: {bssid} — click floor to record samples")
 
@@ -337,11 +505,29 @@ class MainWindow(QMainWindow):
         )
         if self._localizer is not None:
             self._localizer.add_sample(sample)
+            self._survey_fix = self._localizer.fix
         self._survey_samples.append(sample)
         self._threat_panel.set_survey_sample_count(len(self._survey_samples))
         self._status.showMessage(
             f"SURVEY: ({ix:.0f}, {iy:.0f}) RSSI {target.rssi:.1f} dBm — {len(self._survey_samples)} samples"
         )
+
+    def _on_export_requested(self):
+        if not self._survey_samples and not self._last_scan_observations:
+            self._threat_panel.set_status("No survey or scan data to export")
+            return
+        directory = QFileDialog.getExistingDirectory(self, "Export RFMap Session To")
+        if not directory:
+            return
+        fixes = [self._survey_fix] if self._survey_fix is not None else []
+        source = self._last_scan_observations[0].source if self._last_scan_observations else "none"
+        session_dir = SessionStore(directory).save_session(
+            self._survey_samples,
+            fixes,
+            self._threat_panel._alerts,
+            {"scanner_source": source, "survey_samples": len(self._survey_samples)},
+        )
+        self._threat_panel.set_status(f"Session exported to {session_dir}")
 
     def _on_vispy_key(self, event):
         step = 5
@@ -391,17 +577,22 @@ class MainWindow(QMainWindow):
 
 
     def _add_point(self, x: float, y: float, quiet: bool = False):
-        if self._current_rssi is None:
+        if self._data_mode == "demo":
             if not quiet:
-                self._status.showMessage("No RSSI reading yet — wait...")
+                self._status.showMessage("Clear demo data before recording a live survey.")
             return
-        self._measured_points.append((x, y, self._current_rssi))
+        rssi = self._selected_ap_rssi()
+        if rssi is None:
+            if not quiet:
+                self._status.showMessage("No reading for the selected adapter or AP — refresh access points and try again.")
+            return
+        self._measured_points.append((x, y, rssi))
         self._last_click_xy = (x, y)
         self._point_lbl.setText(f"Data points: {len(self._measured_points)}")
         self._update_router()
         if not quiet:
             self._status.showMessage(
-                f"Recorded at ({x:.0f}, {y:.0f}): {self._current_rssi:.1f} dBm"
+                f"Recorded at ({x:.0f}, {y:.0f}): {rssi:.1f} dBm"
             )
         self._compute_now()
 
@@ -443,37 +634,15 @@ class MainWindow(QMainWindow):
         self._update_device_positions()
 
     def _update_device_positions(self):
-        import random
-        count = len(self._device_names)
-        if count < 1 or self._router_xy is None:
-            self._device_positions = []
-            return
-        rx, ry = self._router_xy
-        positions = []
-        for _ in range(count):
-            angle = random.uniform(0, 2 * 3.14159)
-            dist = random.expovariate(0.08)
-            dist = min(dist, 40.0)
-            x = max(0, min(GRID_SIZE - 1, rx + dist * np.cos(angle)))
-            y = max(0, min(GRID_SIZE - 1, ry + dist * np.sin(angle)))
-            positions.append((float(x), float(y)))
-        self._device_positions = positions
+        # The OS reports associated devices, not their physical locations.
+        self._device_positions = []
 
 
     def update_rssi(self, rssi: float, source: str):
-        changed = self._current_rssi is None or abs(rssi - self._current_rssi) > 1.0
         self._current_rssi = rssi
         self._rssi_lbl.setText(f"RSSI: {rssi:.1f} dBm")
         self._history.push(rssi)
         self._canvas.update_waterfall(rssi)
-        if changed:
-            if self._measured_points:
-                x, y, _ = self._measured_points[-1]
-                self._measured_points[-1] = (x, y, rssi)
-                self._update_router()
-                self._compute_now()
-            elif self._router_xy is not None:
-                self._compute_now()
 
     def update_source(self, desc: str):
         self._source_lbl.setText(f"Source: {desc}")
@@ -485,11 +654,13 @@ class MainWindow(QMainWindow):
     def _compute_now(self):
         if self._router_xy is None and not self._measured_points:
             return
-        self._worker.request(self._router_xy, self._obstacles, self._measured_points)
+        self._worker.request(
+            self._router_xy, self._obstacles, self._measured_points, self._cell_meters
+        )
 
     def _on_heatmap_ready(self, heatmap: np.ndarray):
         n = len(self._measured_points)
-        key = (n, len(self._obstacles), self._current_rssi, self._router_xy)
+        key = (n, tuple(self._obstacles), self._router_xy, self._cell_meters)
         if key == self._last_render_key:
             return
         self._last_render_key = key
@@ -528,19 +699,17 @@ class MainWindow(QMainWindow):
             del self._auto_timer
 
     def _record_auto(self):
-        import random
         if hasattr(self, "_last_click_xy"):
             lx, ly = self._last_click_xy
         else:
             lx = ly = GRID_SIZE / 2.0
-        nx = max(0.0, min(float(GRID_SIZE - 1), lx + random.uniform(-5, 5)))
-        ny = max(0.0, min(float(GRID_SIZE - 1), ly + random.uniform(-5, 5)))
-        self._add_point(nx, ny, quiet=True)
+        self._add_point(lx, ly, quiet=True)
 
     def _on_demo(self):
         import random
         self._on_reset()
-        rx, ry = GRID_SIZE * 0.3, GRID_SIZE * 0.4  
+        self._data_mode = "demo"
+        rx, ry = GRID_SIZE * 0.3, GRID_SIZE * 0.4
         for _ in range(20):
             angle = random.uniform(0, 2 * 3.14159)
             dist = random.uniform(1, 35)
@@ -550,8 +719,9 @@ class MainWindow(QMainWindow):
             self._measured_points.append((float(x), float(y), rssi))
         self._point_lbl.setText(f"Data points: {len(self._measured_points)}")
         self._update_router()
+        self._show_demo_warning()
         self._status.showMessage(
-            f"Loaded {len(self._measured_points)} demo points → router auto-detected"
+            f"Loaded {len(self._measured_points)} DEMO points → router auto-detected"
         )
         self._compute_now()
 
@@ -562,6 +732,8 @@ class MainWindow(QMainWindow):
             del self._auto_timer
             self._auto_cb.setChecked(False)
         self._router_xy = None
+        self._data_mode = "live"
+        self._demo_banner.hide()
         self._router_estimated = False
         self._obstacles.clear()
         self._measured_points.clear()
@@ -583,4 +755,5 @@ class MainWindow(QMainWindow):
         self._worker.quit()
         self._worker.wait()
         self._scanner.stop()
+        self._scanner.wait()
         super().closeEvent(event)

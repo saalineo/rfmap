@@ -166,7 +166,9 @@ class IwScanner:
         if scanner_env:
             return self._scan_from_file(scanner_env)
 
-        proc = _run_subprocess(["sudo", "iw", "dev", self.interface, "scan"])
+        # Do not invoke sudo here: a GUI must never block on an invisible password
+        # prompt.  Distributions that allow scans expose this command directly.
+        proc = _run_subprocess(["iw", "dev", self.interface, "scan"])
         if proc is None or proc.returncode != 0:
             return []
         return _parse_iw_scan(proc.stdout, source="iw")
@@ -296,10 +298,14 @@ class AirportScanner:
 
 
 class NmcliScanner:
+    def __init__(self, interface: str | None = None):
+        self.interface = interface
+
     def scan(self) -> list[APObservation]:
-        proc = _run_subprocess([
-            "nmcli", "-f", "SSID,BSSID,CHAN,SECURITY,SIGNAL", "dev", "wifi", "list"
-        ])
+        cmd = ["nmcli", "-t", "-e", "yes", "-f", "SSID,BSSID,CHAN,SECURITY,SIGNAL", "dev", "wifi", "list"]
+        if self.interface:
+            cmd.extend(["ifname", self.interface])
+        proc = _run_subprocess(cmd)
         if proc is None:
             return []
         return self._parse_nmcli(proc.stdout)
@@ -307,8 +313,11 @@ class NmcliScanner:
     def _parse_nmcli(self, output: str) -> list[APObservation]:
         observations: list[APObservation] = []
         lines = output.strip().splitlines()
-        if len(lines) < 2:
+        if not lines:
             return observations
+
+        if not lines[0].startswith("SSID"):
+            return self._parse_nmcli_terse(lines)
 
         for line in lines[1:]:
             parts = line.split()
@@ -340,6 +349,96 @@ class NmcliScanner:
                 continue
 
         return observations
+
+    @staticmethod
+    def _split_terse_fields(line: str) -> list[str]:
+        fields: list[str] = []
+        field: list[str] = []
+        escaped = False
+        for char in line:
+            if escaped:
+                field.append(char)
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == ":":
+                fields.append("".join(field))
+                field = []
+            else:
+                field.append(char)
+        if escaped:
+            field.append("\\")
+        fields.append("".join(field))
+        return fields
+
+    def _parse_nmcli_terse(self, lines: list[str]) -> list[APObservation]:
+        observations: list[APObservation] = []
+        for line in lines:
+            fields = self._split_terse_fields(line)
+            if len(fields) != 5:
+                continue
+            ssid, bssid, channel, security, signal = fields
+            try:
+                normalized_bssid = _normalize_mac(bssid) if bssid != "--" else ""
+                if not normalized_bssid:
+                    continue
+                observations.append(APObservation(
+                    bssid=normalized_bssid,
+                    ssid=ssid or None,
+                    channel=int(channel) if channel != "--" else 0,
+                    frequency_mhz=0,
+                    rssi=(float(signal) / 2.0) - 100.0 if signal != "--" else -100.0,
+                    security="open" if security.lower() in ("--", "none", "open") else security,
+                    source="nmcli",
+                ))
+            except ValueError:
+                continue
+        return observations
+
+
+class LinuxScanner:
+    """Prefer NetworkManager and fall back to an unprivileged iw scan."""
+
+    def __init__(self, interface: str | None = None):
+        self.interface = interface
+        self._nmcli = NmcliScanner(interface)
+        self._iw = IwScanner(interface)
+        self.source = "nmcli"
+
+    def scan(self) -> list[APObservation]:
+        observations = self._nmcli.scan()
+        if observations:
+            self.source = "nmcli"
+            return observations
+        observations = self._iw.scan()
+        if observations:
+            self.source = "iw"
+        return observations
+
+
+def scan_setup_guidance() -> str:
+    system = platform.system()
+    if system == "Linux":
+        return (
+            "No AP scan — connect a Wi-Fi adapter and enable NetworkManager "
+            "(nmcli); RFMap will not request sudo."
+        )
+    if system == "Windows":
+        return "No AP scan — confirm Wi-Fi is enabled, then run RFMap normally."
+    if system == "Darwin":
+        return "No AP scan — allow Wi-Fi access and ensure the macOS airport utility is available."
+    return "No AP scan — this platform has no supported Wi-Fi scanner."
+
+
+def _create_scanner(interface: str | None = None):
+    system = platform.system()
+    if system == "Linux":
+        return LinuxScanner(interface)
+    if system == "Windows":
+        return NetshScanner()
+    if system == "Darwin":
+        return AirportScanner()
+    return IwScanner(interface)
 
 
 class SimulatedScanner:
@@ -422,17 +521,24 @@ class APScanner(QThread):
         super().__init__(parent)
         self._interval = SCAN_INTERVAL
         self._running = False
-        self._real_scanner = IwScanner()
-        self._sim_scanner = SimulatedScanner()
+        self._interface: str | None = None
+        self._real_scanner = _create_scanner()
         self._current_scanner = self._real_scanner
         self._consecutive_failures = 0
         self._failure_limit = CONSECUTIVE_FAILURE_LIMIT
-        self._is_simulated = False
+        self._scan_unavailable_reported = False
         self._scan_now_requested = False
 
     @property
     def is_simulated(self) -> bool:
-        return self._is_simulated
+        return False
+
+    def set_interface(self, interface: str | None):
+        self._interface = interface
+        self._real_scanner = _create_scanner(interface)
+        self._current_scanner = self._real_scanner
+        self._consecutive_failures = 0
+        self._scan_unavailable_reported = False
 
     def run(self):
         self._running = True
@@ -449,25 +555,17 @@ class APScanner(QThread):
 
             if observations:
                 self._consecutive_failures = 0
-                if self._is_simulated:
-                    self._is_simulated = False
-                    self._current_scanner = self._real_scanner
-                    self.source_changed.emit(
-                        "Real scanner (iw) restored"
-                    )
+                self._scan_unavailable_reported = False
+                source = getattr(self._current_scanner, "source", observations[0].source)
+                adapter = f" ({self._interface})" if self._interface else ""
+                self.source_changed.emit(f"AP scanner: {source}{adapter}")
                 self.scan_ready.emit(observations)
             else:
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= self._failure_limit:
-                    if not self._is_simulated:
-                        self._is_simulated = True
-                        self._current_scanner = self._sim_scanner
-                        self._consecutive_failures = 0
-                        sim_obs = self._sim_scanner.scan()
-                        self.source_changed.emit(
-                            "SIMULATED — real scanner unavailable"
-                        )
-                        self.scan_ready.emit(sim_obs)
+                    if not self._scan_unavailable_reported:
+                        self._scan_unavailable_reported = True
+                        self.source_changed.emit(scan_setup_guidance())
                 else:
                     time.sleep(0.5)
 

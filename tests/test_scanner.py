@@ -1,10 +1,14 @@
 import os
 import sys
 import unittest
+from subprocess import CompletedProcess
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from security.ap_scanner import IwScanner, SimulatedScanner, _parse_iw_scan
+from heatmap.math import compute_physics_baseline
+from heatmap.heatmap import gaussian_blob_heatmap
 from security.types import APObservation
 
 
@@ -88,6 +92,24 @@ class TestIwScanParsing(unittest.TestCase):
         finally:
             del os.environ["SENTINEL_SCANNER"]
 
+    @patch("security.ap_scanner._run_subprocess")
+    def test_iw_scan_never_invokes_sudo(self, run_subprocess):
+        run_subprocess.return_value = CompletedProcess([], 0, "", "")
+        IwScanner("wlan9").scan()
+        self.assertEqual(run_subprocess.call_args.args[0], ["iw", "dev", "wlan9", "scan"])
+
+
+class TestSurveyCalibration(unittest.TestCase):
+
+    def test_cell_scale_changes_path_loss_distance(self):
+        short_scale = compute_physics_baseline((50.0, 50.0), cell_meters=0.1)
+        long_scale = compute_physics_baseline((50.0, 50.0), cell_meters=1.0)
+        self.assertGreater(short_scale[50, 70], long_scale[50, 70])
+
+    def test_heatmap_uses_x_y_indexing(self):
+        heatmap = gaussian_blob_heatmap([(10.0, 50.0, -40.0)])
+        self.assertGreater(heatmap[10, 50], heatmap[50, 10])
+
 
 class TestNetshScanner(unittest.TestCase):
 
@@ -144,6 +166,18 @@ class TestNmcliScanner(unittest.TestCase):
         self.assertEqual(results[0].bssid, "aabbccddee01")
         self.assertAlmostEqual(results[0].rssi, -59.0, delta=0.1)
         self.assertEqual(results[1].security, "open")
+
+    def test_terse_nmcli_preserves_spaces_and_escaped_colons(self):
+        from security.ap_scanner import NmcliScanner
+        output = (
+            "My Home:aa\\:bb\\:cc\\:dd\\:ee\\:01:6:WPA1 WPA2:82\n"
+            "Guest:bb\\:cc\\:dd\\:ee\\:ff\\:01:11:--:45\n"
+        )
+        results = NmcliScanner()._parse_nmcli(output)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].ssid, "My Home")
+        self.assertEqual(results[0].bssid, "aabbccddee01")
+        self.assertEqual(results[0].security, "WPA1 WPA2")
 
 
 if __name__ == "__main__":

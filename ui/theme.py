@@ -28,6 +28,12 @@ QLabel {{
     background: transparent;
     padding: 2px 0;
 }}
+QLabel[rfmapRole="demoWarning"] {{
+    background-color: {YELLOW};
+    color: {BG_DARK};
+    padding: 6px;
+    font-weight: bold;
+}}
 QPushButton {{
     background-color: {BG_BORDER};
     color: {FG};

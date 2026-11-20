@@ -67,6 +67,7 @@ def segments_intersect(
 def compute_physics_baseline(
     router_xy: tuple[float, float],
     obstacles: list[Obstacle] | None = None,
+    cell_meters: float = CELL_METERS,
 ) -> np.ndarray:
     if obstacles is None:
         obstacles = []
@@ -75,7 +76,9 @@ def compute_physics_baseline(
     xs = np.arange(GRID_SIZE, dtype=np.float64)
     ys = np.arange(GRID_SIZE, dtype=np.float64)
     X, Y = np.meshgrid(xs, ys, indexing="ij")
-    dists = np.sqrt((X - rx) ** 2 + (Y - ry) ** 2)
+    # RSSI path loss is measured in metres; the grid is only a display unit.
+    cell_meters = max(float(cell_meters), 0.01)
+    dists = np.sqrt((X - rx) ** 2 + (Y - ry) ** 2) * cell_meters
     dists = np.maximum(dists, D0)
 
     baseline = TX_POWER_DBM - 10.0 * PATH_LOSS_EXPONENT * np.log10(dists / D0)
@@ -91,7 +94,7 @@ def compute_physics_baseline(
                         if segments_intersect(rx, ry, float(cx), float(cy), x1, y1, x2, y2):
                             total_attenuation += att
                     if total_attenuation > 0.0:
-                        baseline[cy, cx] -= total_attenuation
+                        baseline[cx, cy] -= total_attenuation
 
     return baseline
 
@@ -128,11 +131,12 @@ def compute_heatmap(
     router_xy: tuple[float, float],
     obstacles: list[Obstacle] | None = None,
     measured_points: list[tuple[float, float, float]] | None = None,
+    cell_meters: float = CELL_METERS,
 ) -> np.ndarray:
     if measured_points is None:
         measured_points = []
 
-    baseline = compute_physics_baseline(router_xy, obstacles)
+    baseline = compute_physics_baseline(router_xy, obstacles, cell_meters)
 
     if len(measured_points) == 0:
         return np.clip(baseline, -90.0, -30.0)
@@ -156,7 +160,7 @@ def compute_heatmap(
         iy = int(round(y))
         ix = max(0, min(GRID_SIZE - 1, ix))
         iy = max(0, min(GRID_SIZE - 1, iy))
-        residuals[i] = vals[i] - baseline[iy, ix]
+        residuals[i] = vals[i] - baseline[ix, iy]
 
     if len(pts) == 1:
         residual_grid = np.full_like(baseline, residuals[0])

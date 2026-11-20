@@ -1,4 +1,5 @@
 import csv
+import html
 import json
 import os
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ def _iso_timestamp() -> str:
 
 
 class SessionStore:
-    def __init__(self, base_dir: str = "sessions"):
+    def __init__(self, base_dir: str = str(Path(__file__).resolve().parents[1] / "sessions")):
         self.base_dir = base_dir
 
     def save_session(
@@ -100,31 +101,33 @@ class SessionStore:
         sample_rows = ""
         for s in samples:
             sample_rows += (
-                f"<tr><td>{s.bssid}</td><td>{s.x:.1f}</td><td>{s.y:.1f}</td>"
+                f"<tr><td>{html.escape(str(s.bssid))}</td><td>{s.x:.1f}</td><td>{s.y:.1f}</td>"
                 f"<td>{s.rssi:.1f}</td><td>{s.channel}</td></tr>\n"
             )
 
         fix_rows = ""
         for f in fixes:
             fix_rows += (
-                f"<tr><td>{f.bssid}</td><td>{f.x:.2f}</td><td>{f.y:.2f}</td>"
+                f"<tr><td>{html.escape(str(f.bssid))}</td><td>{f.x:.2f}</td><td>{f.y:.2f}</td>"
                 f"<td>{f.gdop:.2f}</td><td>{f.confidence:.2f}</td><td>{f.n_samples}</td></tr>\n"
             )
 
         alert_rows = ""
         for a in alerts:
             alert_rows += (
-                f"<tr><td>{a.bssid}</td><td>{a.ssid or '(hidden)'}</td>"
-                f"<td>{a.classification}</td><td>{'; '.join(a.rules_hit)}</td></tr>\n"
+                f"<tr><td>{html.escape(str(a.bssid))}</td>"
+                f"<td>{html.escape(str(a.ssid or '(hidden)'))}</td>"
+                f"<td>{html.escape(str(a.classification))}</td>"
+                f"<td>{html.escape('; '.join(a.rules_hit))}</td></tr>\n"
             )
 
         return f"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Wavey Report</title>
+<head><meta charset="utf-8"><title>RFMap Report</title>
 <style>body{{font-family:sans-serif;margin:2em;}}table{{border-collapse:collapse;}}th,td{{border:1px solid #ccc;padding:4px 8px;}}</style>
 </head>
 <body>
-<h1>Wavey — Site Survey Report</h1>
+<h1>RFMap — Site Survey Report</h1>
 <p>Generated: {datetime.now(timezone.utc).isoformat()}</p>
 
 <h2>Survey Samples</h2>

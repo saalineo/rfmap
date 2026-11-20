@@ -1,6 +1,6 @@
 import numpy as np
 
-from heatmap.math import GRID_SIZE, compute_physics_baseline, Obstacle
+from heatmap.math import CELL_METERS, GRID_SIZE, compute_physics_baseline, Obstacle
 
 SIGMA_DEFAULT = 3.0
 
@@ -11,6 +11,7 @@ def gaussian_blob_heatmap(
     obstacles: list[Obstacle] | None = None,
     grid_size: int = GRID_SIZE,
     sigma: float = SIGMA_DEFAULT,
+    cell_meters: float = CELL_METERS,
 ) -> np.ndarray:
     if obstacles is None:
         obstacles = []
@@ -41,7 +42,7 @@ def gaussian_blob_heatmap(
     heatmap[mask] = weighted_sum[mask] / weight_sum[mask]
 
     if router_xy is not None:
-        physics = compute_physics_baseline(router_xy, obstacles)
+        physics = compute_physics_baseline(router_xy, obstacles, cell_meters)
         blend = np.clip(np.maximum(0.0, 1.0 - weight_sum / 3.0), 0.0, 1.0)
         heatmap = heatmap * (1.0 - blend) + physics * blend
 

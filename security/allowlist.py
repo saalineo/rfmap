@@ -2,6 +2,7 @@ import fnmatch
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 
@@ -14,7 +15,7 @@ class WhitelistEntry:
 
 
 class WhitelistStore:
-    def __init__(self, path: str = "security/allowlist.json"):
+    def __init__(self, path: str = str(Path(__file__).resolve().with_name("allowlist.json"))):
         self.path = path
         self.entries: list[WhitelistEntry] = []
         self._load()

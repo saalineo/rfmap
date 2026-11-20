@@ -74,11 +74,17 @@ def _detect_linux_interfaces() -> list[str]:
     return interfaces
 
 
-def _rssi_linux() -> float | None:
+def _linux_interface(interface: str | None = None) -> str | None:
     interfaces = _detect_linux_interfaces()
     if not interfaces:
         return None
-    iface = interfaces[0]
+    return interface if interface in interfaces else interfaces[0]
+
+
+def _rssi_linux(interface: str | None = None) -> float | None:
+    iface = _linux_interface(interface)
+    if iface is None:
+        return None
 
     rssi = _read_proc_net_wireless(iface)
     if rssi is not None:
@@ -153,29 +159,8 @@ def _get_connected_device_names_linux(interface: str) -> list[str]:
         if line.startswith("Station "):
             mac = line.split()[1]
             macs.append(mac)
-    name_map: dict[str, str] = {}
-    try:
-        with open("/proc/net/arp") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 4 and parts[3] != "00:00:00:00:00:00":
-                    name_map[parts[3].lower()] = parts[0]
-    except OSError:
-        pass
-    names = []
-    for mac in macs:
-        ip = name_map.get(mac.lower())
-        if ip:
-            try:
-                import socket
-                hostname, _, _ = socket.gethostbyaddr(ip)
-                names.append(hostname.split(".")[0])
-            except Exception as exc:
-                logger.debug("Hostname lookup failed for %s: %s", ip, exc)
-                names.append(mac[-8:])
-        else:
-            names.append(mac[-8:])
-    return names
+    # Reverse DNS has no portable timeout and can block the RSSI thread.
+    return [mac[-8:] for mac in macs]
 
 
 def _get_connected_device_names_windows() -> list[str]:
@@ -203,25 +188,31 @@ def _rssi_macos() -> float | None:
 
 
 class RSSIProvider:
-    def __init__(self):
+    def __init__(self, interface: str | None = None):
         self.system = platform.system()
+        self.interface = interface
+
+    def set_interface(self, interface: str | None):
+        self.interface = interface
+
+    def available_interfaces(self) -> list[str]:
+        if self.system == "Linux":
+            return _detect_linux_interfaces()
+        return []
 
     def read(self) -> float | None:
         if self.system == "Linux":
-            return _rssi_linux()
+            return _rssi_linux(self.interface)
         elif self.system == "Windows":
             return _rssi_windows()
         elif self.system == "Darwin":
             return _rssi_macos()
         return None
 
-    @staticmethod
-    def source_description() -> str:
-        system = platform.system()
-        if system == "Linux":
-            interfaces = _detect_linux_interfaces()
-            if interfaces:
-                iface = interfaces[0]
+    def source_description(self) -> str:
+        if self.system == "Linux":
+            iface = _linux_interface(self.interface)
+            if iface:
                 if _read_proc_net_wireless(iface) is not None:
                     return f"Linux /proc/net/wireless ({iface})"
                 if _run_iw_dev_link(iface) is not None:
@@ -229,17 +220,16 @@ class RSSIProvider:
                 if _run_iwconfig(iface) is not None:
                     return f"Linux iwconfig ({iface})"
             return "Linux (no interface found)"
-        elif system == "Windows":
+        elif self.system == "Windows":
             return "Windows netsh wlan"
-        elif system == "Darwin":
+        elif self.system == "Darwin":
             return "macOS airport"
-        return f"Unknown OS ({system})"
+        return f"Unknown OS ({self.system})"
 
     def get_ssid(self) -> str | None:
         if self.system == "Linux":
-            interfaces = _detect_linux_interfaces()
-            if interfaces:
-                iface = interfaces[0]
+            iface = _linux_interface(self.interface)
+            if iface:
                 ssid = _get_ssid_from_iw(iface)
                 if ssid is not None:
                     return ssid
@@ -254,9 +244,9 @@ class RSSIProvider:
 
     def get_connected_devices(self) -> list[str]:
         if self.system == "Linux":
-            interfaces = _detect_linux_interfaces()
-            if interfaces:
-                return _get_connected_device_names_linux(interfaces[0])
+            iface = _linux_interface(self.interface)
+            if iface:
+                return _get_connected_device_names_linux(iface)
         elif self.system == "Windows":
             return _get_connected_device_names_windows()
         return []
@@ -303,21 +293,27 @@ class RSSIWorker(QThread):
         self._interval = POLL_INTERVAL_SECONDS
         self._running = False
         self._real_provider = RSSIProvider()
-        self._sim_provider = SimulatedRSSIProvider()
         self._current_provider = self._real_provider
         self._consecutive_failures = 0
         self._failure_limit = CONSECUTIVE_FAILURE_LIMIT
         self._last_good_value: float | None = None
-        self._is_simulated = False
+        self._unavailable_reported = False
         self._info_counter = 0.0
 
     @property
     def is_simulated(self) -> bool:
-        return self._is_simulated
+        return False
 
     @property
     def last_good_value(self) -> float | None:
         return self._last_good_value
+
+    def set_interface(self, interface: str | None):
+        """Use a specific Wi-Fi adapter, or the system default when None."""
+        self._real_provider.set_interface(interface)
+        self._consecutive_failures = 0
+        self._unavailable_reported = False
+        self.source_changed.emit(self._real_provider.source_description())
 
     def run(self):
         self._running = True
@@ -331,28 +327,18 @@ class RSSIWorker(QThread):
             if rssi is not None:
                 self._consecutive_failures = 0
                 self._last_good_value = rssi
-                if self._is_simulated:
-                    self._is_simulated = False
-                    self._current_provider = self._real_provider
-                    self.source_changed.emit(
-                        RSSIProvider.source_description()
-                    )
-                self.rssi_updated.emit(
-                    rssi, "real" if not self._is_simulated else "simulated"
-                )
+                if self._unavailable_reported:
+                    self._unavailable_reported = False
+                    self.source_changed.emit(self._real_provider.source_description())
+                self.rssi_updated.emit(rssi, "real")
             else:
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= self._failure_limit:
-                    if not self._is_simulated:
-                        self._is_simulated = True
-                        self._current_provider = self._sim_provider
-                        self._consecutive_failures = 0
-                        sim_value = self._sim_provider.read()
-                        self._last_good_value = sim_value
+                    if not self._unavailable_reported:
+                        self._unavailable_reported = True
                         self.source_changed.emit(
-                            "SIMULATED — real Wi-Fi source unavailable"
+                            "No live Wi-Fi reading — choose an adapter or connect to Wi-Fi"
                         )
-                        self.rssi_updated.emit(sim_value, "simulated")
                 else:
                     if self._last_good_value is not None:
                         self.rssi_updated.emit(

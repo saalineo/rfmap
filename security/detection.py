@@ -81,11 +81,16 @@ class RogueDetector:
                         classification = "trusted"
                         confidence = 1.0
                 elif whitelist_entry.ssid and ssid and _ssid_match(ssid, whitelist_entry.ssid):
-                    classification = "rogue"
-                    rules_hit.append(
-                        f"SSID '{ssid}' is whitelisted but BSSID {bssid} is not"
-                    )
-                    confidence = 0.9
+                    if whitelist_entry.bssid:
+                        classification = "rogue"
+                        rules_hit.append(
+                            f"SSID '{ssid}' is bound to a different BSSID than {bssid}"
+                        )
+                        confidence = 0.9
+                    else:
+                        # An SSID-only entry intentionally trusts all APs using that name.
+                        classification = "trusted"
+                        confidence = 0.8
                 elif whitelist_entry.oui and _oui_match(bssid, whitelist_entry.oui):
                     classification = "trusted"
                     confidence = 0.7

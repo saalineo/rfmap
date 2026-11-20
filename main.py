@@ -6,9 +6,9 @@ from wifi.networking import RSSIWorker
 from ui.main_window import MainWindow
 
 
-def main():
+def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("Wavey")
+    app.setApplicationName("RFMap")
 
     window = MainWindow()
     window.showMaximized()
@@ -18,12 +18,14 @@ def main():
     rssi_worker.source_changed.connect(window.update_source)
     rssi_worker.ssid_updated.connect(window.update_ssid)
     rssi_worker.devices_updated.connect(window.update_devices)
+    window.attach_rssi_worker(rssi_worker)
     rssi_worker.start()
 
-    app.aboutToQuit.connect(rssi_worker.stop)
-
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    rssi_worker.stop()
+    rssi_worker.wait()
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

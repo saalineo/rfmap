@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+import importlib.util
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -63,7 +64,7 @@ class TestE2E(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(saved_dir, "report.html")))
 
         loaded = store.load_samples(saved_dir)
-        self.assertEqual(len(loaded), n_samples)
+        self.assertEqual(len(loaded), len(localizer.samples))
 
     def test_evil_twin_detection_chain(self):
         whitelist_path = os.path.join(self.tmp, "allowlist.json")
@@ -101,6 +102,32 @@ class TestE2E(unittest.TestCase):
         saved_dir = store.save_session(samples, [fix], [])
         loaded_samples = store.load_samples(saved_dir)
         self.assertEqual(len(loaded_samples), 8)
+
+    @unittest.skipUnless(importlib.util.find_spec("vispy"), "VisPy is not installed")
+    def test_live_rssi_does_not_mutate_recorded_point(self):
+        from ui.main_window import MainWindow
+
+        class Label:
+            def setText(self, _text):
+                pass
+
+        class History:
+            def push(self, _value):
+                pass
+
+        class Canvas:
+            def update_waterfall(self, _value):
+                pass
+
+        window = type("Window", (), {
+            "_current_rssi": -50.0,
+            "_measured_points": [(10.0, 50.0, -50.0)],
+            "_rssi_lbl": Label(),
+            "_history": History(),
+            "_canvas": Canvas(),
+        })()
+        MainWindow.update_rssi(window, -70.0, "real")
+        self.assertEqual(window._measured_points, [(10.0, 50.0, -50.0)])
 
 
 if __name__ == "__main__":

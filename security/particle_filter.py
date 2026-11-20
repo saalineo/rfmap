@@ -35,7 +35,7 @@ class ParticleFilter:
 
     def seed_around(self, x: float, y: float, spread: float = 10.0):
         rng = np.random.default_rng(0)
-        self._particles = rng.normal(x, spread, size=(self.n_particles, 2))
+        self._particles = rng.normal([x, y], spread, size=(self.n_particles, 2))
         self._particles[:, 0] = np.clip(self._particles[:, 0], 0, GRID_SIZE)
         self._particles[:, 1] = np.clip(self._particles[:, 1], 0, GRID_SIZE)
         self._weights = np.ones(self.n_particles, dtype=np.float64) / self.n_particles
@@ -56,9 +56,9 @@ class ParticleFilter:
         if obstacles is None:
             obstacles = []
 
-        xs = np.array([s[0] for s in samples], dtype=np.float64)
-        ys = np.array([s[1] for s in samples], dtype=np.float64)
-        rssi = np.array([s[2] for s in samples], dtype=np.float64)
+        xs = np.array([s[0] if isinstance(s, (tuple, list)) else s.x for s in samples], dtype=np.float64)
+        ys = np.array([s[1] if isinstance(s, (tuple, list)) else s.y for s in samples], dtype=np.float64)
+        rssi = np.array([s[2] if isinstance(s, (tuple, list)) else s.rssi for s in samples], dtype=np.float64)
 
         for i in range(self.n_particles):
             px, py = self._particles[i]

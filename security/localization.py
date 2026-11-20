@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from heatmap.math import GRID_SIZE, Obstacle
+from heatmap.math import GRID_SIZE, Obstacle, segments_intersect
 from security.types import LocalizationFix, SurveySample
 from security.particle_filter import ParticleFilter
 
@@ -63,7 +63,7 @@ class APLocalizer:
 
         tx_est = float(np.max(rssi_vals))
 
-        def _make_residuals(xs_arr, rssi_arr):
+        def _make_residuals(xs_arr, ys_arr, rssi_arr):
             def _residuals(params):
                 x, y = params
                 dists = np.sqrt((xs_arr - x) ** 2 + (ys_arr - y) ** 2)
@@ -80,7 +80,7 @@ class APLocalizer:
                 return rssi_arr - (predicted - wall_loss)
             return _residuals
 
-        residuals = _make_residuals(xs, rssi_vals)
+        residuals = _make_residuals(xs, ys, rssi_vals)
 
         try:
             from scipy.optimize import least_squares
@@ -110,8 +110,7 @@ class APLocalizer:
                 filtered_xs = xs[outlier_mask]
                 filtered_ys = ys[outlier_mask]
                 filtered_rssi = rssi_vals[outlier_mask]
-                filtered_residuals = _make_residuals(filtered_xs, filtered_rssi)
-
+                filtered_residuals = _make_residuals(filtered_xs, filtered_ys, filtered_rssi)
                 fit2 = least_squares(
                     filtered_residuals, fit.x,
                     bounds=([0, 0], [GRID_SIZE, GRID_SIZE]),

@@ -37,6 +37,18 @@ class RogueReport:
     confidence: float = 0.0
     channel: int = 0
     first_seen: float = 0.0
+    alert_type: str = "suspicious"  # "new_ssid", "evil_twin", "deauth_burst", "hidden_ssid", "open_corp"
+
+
+@dataclass
+class SentryLogEntry:
+    timestamp: float
+    event_type: str
+    bssid: str
+    ssid: str | None
+    details: str
+    severity: str  # "HIGH", "MEDIUM", "LOW"
+
 
 
 @dataclass

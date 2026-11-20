@@ -1,14 +1,15 @@
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
-        logs_dir = "logs"
+        logs_dir = Path(__file__).resolve().parents[1] / "logs"
         os.makedirs(logs_dir, exist_ok=True)
-        log_path = os.path.join(logs_dir, "wavey.log")
+        log_path = os.path.join(logs_dir, "rfmap.log")
         handler = logging.FileHandler(log_path)
         handler.setFormatter(logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

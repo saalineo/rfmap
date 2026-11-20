@@ -1,7 +1,7 @@
 [project]
-name = "wavey"
+name = "rfmap"
 version = "0.2.0"
-description = "Wavey — 3D Wi-Fi heatmapper with rogue AP detection and physical localization"
+description = "RFMap — Wi-Fi survey mapper with heatmaps and authorized AP assessment"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

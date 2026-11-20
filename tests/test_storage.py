@@ -98,6 +98,19 @@ class TestSessionStore(unittest.TestCase):
         self.assertIn("Survey Samples", content)
         self.assertIn("aa:bb:cc:dd:ee:01", content)
 
+    def test_report_escapes_untrusted_ap_values(self):
+        alert = RogueReport(
+            bssid="<bssid>",
+            ssid="<script>alert(1)</script>",
+            classification="rogue",
+            rules_hit=["<img src=x onerror=alert(1)>"],
+        )
+        session_dir = self.store.save_session([], [], [alert], {})
+        with open(os.path.join(session_dir, "report.html")) as report:
+            content = report.read()
+        self.assertNotIn("<script>alert(1)</script>", content)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", content)
+
 
 if __name__ == "__main__":
     unittest.main()
