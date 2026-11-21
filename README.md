@@ -7,10 +7,7 @@ Real-time Wi-Fi survey mapper with coverage heatmaps, floor-plan calibration, AP
 
 Start with [the architecture guide](docs/ARCHITECTURE.md) to understand the product boundary and data flow, then use [the development guide](docs/DEVELOPMENT.md) to run and extend it. Each major package also has its own README:
 
-- [Wi-Fi data sources](wifi/README.md)
-- [Heatmap model](heatmap/README.md)
-- [Security assessment](security/README.md)
-- [Desktop UI](ui/README.md)
+- [Architecture and package map](docs/ARCHITECTURE.md)
 - [Tests](tests/README.md)
 
 [![Python](https://img.shields.io/badge/python-3.13+-blue?logo=python&logoColor=white)]()
@@ -50,7 +47,7 @@ Toggle the **Threat Scanner** panel to access the AP scanner and rogue AP locali
 ## Quick Start
 
 ```bash
-python main.py
+python -m rfmap
 ```
 
 ## Usage
@@ -71,9 +68,9 @@ python main.py
 
 Three decoupled pipelines on separate threads:
 
-1. **Wi-Fi** (`wifi/networking.py`) — OS-level RSSI polling; unavailable hardware never falls back to fake readings
-2. **Heatmap** (`heatmap/`) — Gaussian blob kernel regression, physics path-loss model, router estimation
-3. **UI** (`ui/`) — PyQt6 window with VisPy OpenGL 3D canvas
+1. **Wi-Fi** (`rfmap/wifi/`) — OS-level RSSI polling; unavailable hardware never falls back to fake readings
+2. **Heatmap** (`rfmap/core/`) — Gaussian blob kernel regression, physics path-loss model, router estimation
+3. **UI** (`rfmap/ui/`) — PyQt6 window with VisPy OpenGL 3D canvas
 
 ## Platform Support
 

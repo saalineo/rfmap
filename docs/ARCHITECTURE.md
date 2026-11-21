@@ -9,12 +9,19 @@ RFMap is not an attack tool. It does not transmit frames, break Wi-Fi security, 
 ## Repository map
 
 ```text
-main.py       Application composition: Qt event loop, window, RSSI worker
-wifi/         Connected-network RSSI, SSID, adapter, and client discovery
-heatmap/      Grid geometry, wall attenuation, interpolation, colour mapping
-security/     AP scans, allowlist rules, localization, sessions, audit events
-ui/           PyQt widgets and VisPy 3D rendering
-tests/        Unit, flow, parser, and regression tests
+rfmap/app.py          Application composition: Qt event loop, window, RSSI worker
+rfmap/core/           Pure numerics, no Qt: constants, geometry, propagation, heatmap, colormap
+rfmap/wifi/           Connected-network RSSI/SSID/clients (probes/ per OS, provider, worker)
+rfmap/scanning/       AP discovery (backends/ per OS, parsing, simulated, worker)
+rfmap/sentinel/       Rogue-AP detection, allowlist, trust score, deauth monitor, config
+rfmap/localization/   Particle filter and AP localizer
+rfmap/storage/        Session persistence and export
+rfmap/ui/             PyQt6: main_window, survey/, assessment/, canvas/, chrome/, theme/, workers/
+rfmap/models.py       Shared dataclasses (APObservation, SurveySample, ...)
+rfmap/paths.py        Every on-disk location (config/, logs/, sessions/)
+config/               Runtime JSON: sentinel.json, allowlist.json
+scripts/              Manual tools (scan_smoke.py)
+tests/                Unit, flow, parser, and regression tests
 docs/         Architecture and contributor documentation
 ```
 
@@ -27,7 +34,7 @@ Wi-Fi adapter ──> wifi.RSSIWorker ──> MainWindow ──> HeatmapWorker �
                                           └── APScanner ──> SentinelPanel / selected AP
 ```
 
-`main.py` owns application startup. It creates one `MainWindow` and one `RSSIWorker`, then connects Qt signals to the window. The window owns the AP scanner and heatmap worker because it owns the survey state they consume.
+`rfmap/app.py` owns application startup. It creates one `MainWindow` and one `RSSIWorker`, then connects Qt signals to the window. The window owns the AP scanner and heatmap worker because it owns the survey state they consume.
 
 ## Primary data contracts
 
@@ -53,11 +60,11 @@ Grid coordinates run from `0` through `GRID_SIZE - 1`. The map-scale control con
 
 | Change | Primary location |
 |---|---|
-| New OS adapter/source support | `wifi/networking.py` and `security/ap_scanner.py` |
-| Signal or wall model change | `heatmap/math.py`, with a regression test |
-| Heatmap interpolation/presentation change | `heatmap/heatmap.py` or `ui/canvas.py` |
-| Survey interaction or controls | `ui/main_window.py` |
-| Scanner-table, whitelist, or export UI | `ui/scanner_panel.py` and `security/` |
-| Report/session format | `security/sessions.py` |
+| New OS adapter/source support | `rfmap/wifi/` and `rfmap/scanning/` |
+| Signal or wall model change | `rfmap/core/propagation.py`, with a regression test |
+| Heatmap interpolation/presentation change | `rfmap/core/heatmap.py` or `rfmap/ui/canvas/heatmap_canvas.py` |
+| Survey interaction or controls | `rfmap/ui/main_window.py` |
+| Scanner-table, whitelist, or export UI | `rfmap/ui/assessment/sentinel_panel.py` and `rfmap/sentinel/` |
+| Report/session format | `rfmap/storage/sessions.py` |
 
 See [Development](DEVELOPMENT.md) for the normal edit-and-test workflow.

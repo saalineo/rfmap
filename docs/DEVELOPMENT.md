@@ -6,7 +6,7 @@ RFMap targets Python 3.13 or newer. Install the declared dependencies in an isol
 
 ```bash
 python -m pip install -r requirements.txt
-python main.py
+python -m rfmap
 ```
 
 For Linux AP scans, enable NetworkManager and ensure `nmcli` can see the chosen Wi-Fi adapter. RFMap deliberately does not prompt for `sudo`.
@@ -14,8 +14,8 @@ For Linux AP scans, enable NetworkManager and ensure `nmcli` can see the chosen 
 ## Everyday checks
 
 ```bash
-python -m unittest discover -s tests -q
-python -m compileall -q main.py wifi heatmap security ui tests
+python -m unittest discover -s tests -t . -q
+python -m compileall -q rfmap scripts tests
 ```
 
 Use the UI manually after dependency installation to check floor-plan import, scale changes, adapter selection, live scan failure guidance, and the demo-data warning.
