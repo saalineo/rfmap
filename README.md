@@ -1,7 +1,25 @@
-# RFMap
+<h1 align="center">rfmap</h1>
 
+<p align="center">
+  <img src="logo/rendered/rfmap.png" alt="RFMap Logo" width="128" height="128" />
+</p>
 
-Real-time Wi-Fi survey mapper with coverage heatmaps, floor-plan calibration, AP inventory, and authorized rogue-AP assessment. Walk around, click your position, and watch the heatmap build as you measure.
+<p align="center">
+  <strong>Real-time Wi-Fi survey mapper with coverage heatmaps, floor-plan calibration, AP inventory, and authorized rogue-AP assessment.</strong><br>
+  <em>Walk around, click your position, and watch the heatmap build as you measure.</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.13+-blue?logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/PyQt6-6.x-green?logo=qt&logoColor=white" alt="PyQt6" />
+  <img src="https://img.shields.io/badge/VisPy-0.16+-orange" alt="VisPy" />
+  <img src="https://img.shields.io/badge/NumPy-2.x-013243?logo=numpy&logoColor=white" alt="NumPy" />
+  <img src="https://img.shields.io/badge/SciPy-1.x-8CAAE6?logo=scipy&logoColor=white" alt="SciPy" />
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License" />
+  <img src="https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20macos-lightgrey" alt="Platform" />
+  <img src="https://img.shields.io/badge/GPU-OpenGL-red?logo=opengl&logoColor=white" alt="OpenGL" />
+  <img src="https://img.shields.io/badge/status-active-success" alt="Status" />
+</p>
 
 ## Developer guide
 
@@ -9,16 +27,6 @@ Start with [the architecture guide](docs/ARCHITECTURE.md) to understand the prod
 
 - [Architecture and package map](docs/ARCHITECTURE.md)
 - [Tests](tests/README.md)
-
-[![Python](https://img.shields.io/badge/python-3.13+-blue?logo=python&logoColor=white)]()
-[![PyQt6](https://img.shields.io/badge/PyQt6-6.x-green?logo=qt&logoColor=white)]()
-[![VisPy](https://img.shields.io/badge/VisPy-0.16+-orange)]()
-[![NumPy](https://img.shields.io/badge/NumPy-2.x-013243?logo=numpy&logoColor=white)]()
-[![SciPy](https://img.shields.io/badge/SciPy-1.x-8CAAE6?logo=scipy&logoColor=white)]()
-[![License](https://img.shields.io/badge/license-MIT-lightgrey)]()
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20macos-lightgrey)]()
-[![OpenGL](https://img.shields.io/badge/GPU-OpenGL-red?logo=opengl&logoColor=white)]()
-[![Status](https://img.shields.io/badge/status-active-success)]()
 
 ## Features
 
@@ -62,7 +70,7 @@ python -m rfmap
 | Scale | Set the real-world metres represented by each grid cell |
 | Refresh Access Points | Scan, then select an AP for survey readings |
 | Load DEMO Data | Load clearly labelled synthetic data; clear it before a real survey |
-| ⚡ Threat Scanner | Open AP scanner + rogue AP survey |
+| Threat Scanner | Open AP scanner + rogue AP survey |
 
 ## Architecture
 
