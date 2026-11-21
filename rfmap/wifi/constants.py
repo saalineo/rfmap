@@ -1,0 +1,15 @@
+"""Polling cadence and RSSI clamp range."""
+
+POLL_INTERVAL_SECONDS = 1.0
+
+
+CONSECUTIVE_FAILURE_LIMIT = 5
+
+
+RSSI_MIN_DBM = -95
+
+
+RSSI_MAX_DBM = -25
+
+
+INFO_POLL_INTERVAL = 10.0
