@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from security.localization import APLocalizer
+from rfmap.localization.localizer import APLocalizer
 
 from tests import ring_samples, make_sample
 

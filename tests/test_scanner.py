@@ -6,10 +6,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from security.ap_scanner import IwScanner, SimulatedScanner, _parse_iw_scan
-from heatmap.math import compute_physics_baseline
-from heatmap.heatmap import gaussian_blob_heatmap
-from security.types import APObservation
+from rfmap.scanning.backends.iw import IwScanner
+from rfmap.scanning.simulated import SimulatedScanner
+from rfmap.scanning.parsing import parse_iw_scan
+from rfmap.core.propagation import compute_physics_baseline
+from rfmap.core.heatmap import gaussian_blob_heatmap
+from rfmap.models import APObservation
 
 
 class TestIwScanParsing(unittest.TestCase):
@@ -23,13 +25,13 @@ class TestIwScanParsing(unittest.TestCase):
     def test_fixture_parsing(self):
         with open(self.fixture_path) as f:
             output = f.read()
-        results = _parse_iw_scan(output, source="fixture")
+        results = parse_iw_scan(output, source="fixture")
         self.assertEqual(len(results), 6)
 
     def test_fixture_has_trusted_wpa(self):
         with open(self.fixture_path) as f:
             output = f.read()
-        results = _parse_iw_scan(output, source="fixture")
+        results = parse_iw_scan(output, source="fixture")
         trusted = [r for r in results if r.bssid == "001122334455"]
         self.assertEqual(len(trusted), 1)
         self.assertEqual(trusted[0].ssid, "MyCorp-WPA")
@@ -39,21 +41,21 @@ class TestIwScanParsing(unittest.TestCase):
     def test_fixture_has_hidden_bss(self):
         with open(self.fixture_path) as f:
             output = f.read()
-        results = _parse_iw_scan(output, source="fixture")
+        results = parse_iw_scan(output, source="fixture")
         hidden = [r for r in results if r.ssid is None]
         self.assertGreaterEqual(len(hidden), 2)
 
     def test_fixture_has_open_bss(self):
         with open(self.fixture_path) as f:
             output = f.read()
-        results = _parse_iw_scan(output, source="fixture")
+        results = parse_iw_scan(output, source="fixture")
         open_aps = [r for r in results if r.security == "open"]
         self.assertGreaterEqual(len(open_aps), 3)
 
     def test_fixture_rssi_values(self):
         with open(self.fixture_path) as f:
             output = f.read()
-        results = _parse_iw_scan(output, source="fixture")
+        results = parse_iw_scan(output, source="fixture")
         for obs in results:
             self.assertGreaterEqual(obs.rssi, -100.0)
             self.assertLessEqual(obs.rssi, -25.0)
@@ -61,7 +63,7 @@ class TestIwScanParsing(unittest.TestCase):
     def test_fixture_bssid_normalized(self):
         with open(self.fixture_path) as f:
             output = f.read()
-        results = _parse_iw_scan(output, source="fixture")
+        results = parse_iw_scan(output, source="fixture")
         for obs in results:
             self.assertEqual(obs.bssid, obs.bssid.lower())
             self.assertNotIn(":", obs.bssid)
@@ -92,7 +94,7 @@ class TestIwScanParsing(unittest.TestCase):
         finally:
             del os.environ["SENTINEL_SCANNER"]
 
-    @patch("security.ap_scanner._run_subprocess")
+    @patch("rfmap.scanning.backends.iw.run_subprocess")
     def test_iw_scan_never_invokes_sudo(self, run_subprocess):
         run_subprocess.return_value = CompletedProcess([], 0, "", "")
         IwScanner("wlan9").scan()
@@ -123,7 +125,7 @@ class TestNetshScanner(unittest.TestCase):
             "         Signal             : 82%\n"
         )
         scanner = type("NetshScanner", (), {"scan": lambda self: []})()
-        from security.ap_scanner import NetshScanner
+        from rfmap.scanning.backends.netsh import NetshScanner
         ns = NetshScanner()
         results = ns._parse_netsh(output)
         self.assertEqual(len(results), 1)
@@ -140,7 +142,7 @@ class TestAirportScanner(unittest.TestCase):
             "             SSID BSSID             RSSI CHANNEL HT CC\n"
             "      MyCorp    00:11:22:33:44:55   -58   36     Y  US\n"
         )
-        from security.ap_scanner import AirportScanner
+        from rfmap.scanning.backends.airport import AirportScanner
         ap = AirportScanner()
         results = ap._parse_airport(output)
         self.assertEqual(len(results), 1)
@@ -158,7 +160,7 @@ class TestNmcliScanner(unittest.TestCase):
             "MyCorp            aa:bb:cc:dd:ee:01    6  WPA2      82\n"
             "OpenGuest         bb:cc:dd:ee:ff:01   11  --        45\n"
         )
-        from security.ap_scanner import NmcliScanner
+        from rfmap.scanning.backends.nmcli import NmcliScanner
         nm = NmcliScanner()
         results = nm._parse_nmcli(output)
         self.assertEqual(len(results), 2)
@@ -168,7 +170,7 @@ class TestNmcliScanner(unittest.TestCase):
         self.assertEqual(results[1].security, "open")
 
     def test_terse_nmcli_preserves_spaces_and_escaped_colons(self):
-        from security.ap_scanner import NmcliScanner
+        from rfmap.scanning.backends.nmcli import NmcliScanner
         output = (
             "My Home:aa\\:bb\\:cc\\:dd\\:ee\\:01:6:WPA1 WPA2:82\n"
             "Guest:bb\\:cc\\:dd\\:ee\\:ff\\:01:11:--:45\n"

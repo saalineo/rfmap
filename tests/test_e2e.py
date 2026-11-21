@@ -7,12 +7,12 @@ import importlib.util
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from security.ap_scanner import SimulatedScanner
-from security.detection import RogueDetector
-from security.localization import APLocalizer
-from security.types import APObservation, SurveySample
-from security.sessions import SessionStore
-from security.allowlist import WhitelistStore
+from rfmap.scanning.simulated import SimulatedScanner
+from rfmap.sentinel.detection import RogueDetector
+from rfmap.localization.localizer import APLocalizer
+from rfmap.models import APObservation, SurveySample
+from rfmap.storage.sessions import SessionStore
+from rfmap.sentinel.allowlist import WhitelistStore
 
 from tests import ring_samples
 
@@ -104,8 +104,52 @@ class TestE2E(unittest.TestCase):
         self.assertEqual(len(loaded_samples), 8)
 
     @unittest.skipUnless(importlib.util.find_spec("vispy"), "VisPy is not installed")
+    def test_map_click_is_not_treated_as_a_wall_drag(self):
+        from rfmap.ui.canvas.heatmap_canvas import HeatmapCanvas
+
+        class Event:
+            button = 1
+            pos = (10, 10)
+
+        canvas = object.__new__(HeatmapCanvas)
+        canvas._drag_origin = None
+        canvas._dragging = False
+        canvas.pixel_to_scene = lambda _x, _y: (12.5, 18.0)
+        clicks = []
+        drags = []
+        canvas.on_click = lambda x, y: clicks.append((x, y))
+        canvas.on_drag_start = lambda x, y: None
+        canvas.on_drag_end = lambda x, y: drags.append((x, y))
+
+        canvas._on_mouse_press(Event())
+        canvas._on_mouse_release(Event())
+
+        self.assertEqual(clicks, [(12.5, 18.0)])
+        self.assertEqual(drags, [])
+
+    @unittest.skipUnless(importlib.util.find_spec("vispy"), "VisPy is not installed")
+    def test_small_pointer_movement_does_not_start_a_drag(self):
+        from rfmap.ui.canvas.heatmap_canvas import HeatmapCanvas
+
+        class Event:
+            button = 1
+            pos = (10, 10)
+
+        canvas = object.__new__(HeatmapCanvas)
+        canvas._drag_origin = (12.5, 18.0)
+        canvas._dragging = False
+        canvas.pixel_to_scene = lambda _x, _y: (12.7, 18.1)
+        moves = []
+        canvas.on_drag_move = lambda x, y: moves.append((x, y))
+
+        canvas._on_mouse_move(Event())
+
+        self.assertFalse(canvas._dragging)
+        self.assertEqual(moves, [])
+
+    @unittest.skipUnless(importlib.util.find_spec("vispy"), "VisPy is not installed")
     def test_live_rssi_does_not_mutate_recorded_point(self):
-        from ui.main_window import MainWindow
+        from rfmap.ui.main_window import MainWindow
 
         class Label:
             def setText(self, _text):
@@ -128,6 +172,23 @@ class TestE2E(unittest.TestCase):
         })()
         MainWindow.update_rssi(window, -70.0, "real")
         self.assertEqual(window._measured_points, [(10.0, 50.0, -50.0)])
+
+    @unittest.skipUnless(importlib.util.find_spec("vispy"), "VisPy is not installed")
+    def test_connection_updates_do_not_require_hidden_labels(self):
+        from rfmap.ui.main_window import MainWindow
+
+        window = type("Window", (), {
+            "_ssid": "",
+            "_device_names": [],
+            "_device_positions": [],
+            "_update_device_positions": lambda self: setattr(self, "_device_positions", []),
+        })()
+
+        MainWindow.update_ssid(window, "site-wifi")
+        MainWindow.update_devices(window, ["device-a"])
+
+        self.assertEqual(window._ssid, "site-wifi")
+        self.assertEqual(window._device_names, ["device-a"])
 
 
 if __name__ == "__main__":

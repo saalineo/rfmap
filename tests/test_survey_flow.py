@@ -5,8 +5,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from security.localization import APLocalizer
-from security.types import SurveySample
+from rfmap.localization.localizer import APLocalizer
+from rfmap.models import SurveySample
 
 
 class TestSurveyFlow(unittest.TestCase):

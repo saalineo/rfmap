@@ -13,7 +13,7 @@ The test suite uses the standard library `unittest` runner.
 Run all tests with:
 
 ```bash
-python -m unittest discover -s tests -q
+python -m unittest discover -s tests -t . -q
 ```
 
 Keep parser fixtures and simulated scanner data inside tests or explicit demos. Production runtime must not silently switch to either.

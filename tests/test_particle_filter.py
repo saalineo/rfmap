@@ -9,9 +9,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from security.particle_filter import ParticleFilter, _path_loss_predicted, _wall_attenuation
-from security.types import APObservation
-from heatmap.math import Obstacle
+from rfmap.localization.particle_filter import ParticleFilter, _path_loss_predicted, _wall_attenuation
+from rfmap.models import APObservation
+from rfmap.core.geometry import Obstacle
 
 from tests import ring_samples
 
@@ -94,7 +94,7 @@ class TestParticleFilter(unittest.TestCase):
 class TestAPLocalizerWithParticleFilter(unittest.TestCase):
 
     def test_pf_refines_ls_fix(self):
-        from security.localization import APLocalizer
+        from rfmap.localization.localizer import APLocalizer
 
         localizer = APLocalizer("aa:bb:cc:dd:ee:02")
         true_x, true_y = 40.0, 60.0

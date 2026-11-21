@@ -5,7 +5,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-from security.types import LocalizationFix
+from rfmap.models import LocalizationFix
 
 
 class TestOverlayGeometry(unittest.TestCase):

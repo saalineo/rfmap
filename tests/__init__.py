@@ -2,7 +2,7 @@ import math
 
 
 def make_sample(x, y, rssi, bssid="aa:bb:cc:dd:ee:02", channel=6):
-    from security.types import SurveySample
+    from rfmap.models import SurveySample
     return SurveySample(bssid=bssid, x=x, y=y, rssi=rssi, channel=channel)
 
 

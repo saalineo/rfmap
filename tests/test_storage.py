@@ -5,8 +5,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from security.sessions import SessionStore
-from security.types import LocalizationFix, RogueReport, SurveySample
+from rfmap.storage.sessions import SessionStore
+from rfmap.models import LocalizationFix, RogueReport, SurveySample
 
 
 class TestSessionStore(unittest.TestCase):

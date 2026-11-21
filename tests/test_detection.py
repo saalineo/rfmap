@@ -6,9 +6,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from security.detection import RogueDetector, _is_corporate_ssid, _is_locally_administered_mac
-from security.types import APObservation
-from security.allowlist import WhitelistStore, WhitelistEntry
+from rfmap.sentinel.detection import RogueDetector, _is_corporate_ssid, _is_locally_administered_mac
+from rfmap.models import APObservation
+from rfmap.sentinel.allowlist import WhitelistStore, WhitelistEntry
 
 
 def make_obs(bssid, ssid, channel=6, rssi=-50, security="WPA2-Personal", first_seen=None):
