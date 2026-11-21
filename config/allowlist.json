@@ -1,0 +1,26 @@
+[
+  {
+    "ssid": "MyCorp-WPA",
+    "bssid": "aabbccddee01",
+    "oui": "",
+    "note": ""
+  },
+  {
+    "ssid": "",
+    "bssid": "",
+    "oui": "AA:BB:CC",
+    "note": ""
+  },
+  {
+    "ssid": "MyCorp",
+    "bssid": "aabbccddee01",
+    "oui": "",
+    "note": ""
+  },
+  {
+    "ssid": "MyCorp*",
+    "bssid": "",
+    "oui": "",
+    "note": ""
+  }
+]

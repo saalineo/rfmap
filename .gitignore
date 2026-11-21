@@ -6,7 +6,14 @@ dist/
 wheels/
 *.egg-info
 
+# Rust-generated files
+target/
+
 # Virtual environments
 .venv
 tests/*
 !tests/README.md
+
+# Runtime output
+logs/
+sessions/

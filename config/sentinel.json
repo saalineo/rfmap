@@ -1,0 +1,7 @@
+{
+  "scan_interval_s": 4,
+  "whitelist_path": "config/allowlist.json",
+  "min_points": 3,
+  "report_dir": "sessions",
+  "logs_dir": "logs"
+}
